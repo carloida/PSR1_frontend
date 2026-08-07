@@ -70,10 +70,13 @@ export async function uploadSourceFile(file: File): Promise<UploadResult> {
   return (await response.json()) as UploadResult;
 }
 
-export async function fetchSensorStream(sensor?: string): Promise<SensorStream> {
+export async function fetchSensorStream(sensor?: string, step?: string): Promise<SensorStream> {
   const url = new URL(`${apiBaseUrl}/api/live/sensor-stream`);
   if (sensor) {
     url.searchParams.set("sensor", sensor);
+  }
+  if (step && step !== "All steps") {
+    url.searchParams.set("step", step);
   }
   let response: Response;
   try {

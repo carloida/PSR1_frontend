@@ -295,7 +295,14 @@ body.is-resizing-rail-split * {
   color: var(--ink);
 }
 
-.project-header-actions .project-show-plots:hover {
+.project-header-actions .project-show-live-chart {
+  border-color: rgba(252, 191, 73, 0.94);
+  background: var(--gold);
+  color: #8f141a;
+}
+
+.project-header-actions .project-show-plots:hover,
+.project-header-actions .project-show-live-chart:hover {
   border-color: var(--gold);
   background: var(--gold);
   color: var(--ink);
@@ -1399,7 +1406,7 @@ tbody tr.selected {
 
 .stream-toolbar {
   display: grid;
-  grid-template-columns: minmax(14rem, 1fr) auto auto;
+  grid-template-columns: minmax(11rem, 1fr) minmax(8rem, 0.72fr) auto auto auto;
   gap: 0.65rem;
   align-items: end;
 }
@@ -1476,7 +1483,18 @@ tbody tr.selected {
   color: var(--ink);
 }
 
-.stream-refresh:hover {
+.live-chart-hide-button {
+  min-height: 2.4rem;
+  border: 1px solid var(--line-dark);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 0.45rem 0.65rem;
+  font-weight: 900;
+}
+
+.stream-refresh:hover,
+.live-chart-hide-button:hover {
   border-color: var(--gold);
   background: var(--gold);
   color: var(--ink);
@@ -2222,6 +2240,10 @@ tbody tr.selected {
 
   .persistent-live-chart .stream-stage {
     grid-template-columns: 1fr;
+  }
+
+  .persistent-live-chart .stream-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .stream-side {

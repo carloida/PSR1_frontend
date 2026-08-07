@@ -94,8 +94,11 @@ export type SensorStream = {
   mode: "csv_replay" | "live_stream";
   source: string;
   time_column: string;
+  step_column?: string | null;
   sensor: string;
   sensors: string[];
+  step: string;
+  steps: string[];
   points: SensorPoint[];
   summary: {
     count: number;

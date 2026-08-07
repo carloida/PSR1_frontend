@@ -38,6 +38,7 @@ function App() {
   const [modalPlot, setModalPlot] = useState<PlotFile | undefined>();
   const [plotZoom, setPlotZoom] = useState(100);
   const [plotRailHidden, setPlotRailHidden] = useState(() => window.localStorage.getItem("psr-fdc-plot-rail-hidden") === "true");
+  const [liveChartHidden, setLiveChartHidden] = useState(() => window.localStorage.getItem("psr-fdc-live-chart-hidden") === "true");
   const [plotRailWidth, setPlotRailWidth] = useState(() => {
     const saved = Number(window.localStorage.getItem("psr-fdc-plot-rail-width"));
     return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_PLOT_RAIL_WIDTH;
@@ -106,6 +107,11 @@ function App() {
     window.localStorage.setItem("psr-fdc-plot-rail-hidden", String(hidden));
   }
 
+  function updateLiveChartHidden(hidden: boolean) {
+    setLiveChartHidden(hidden);
+    window.localStorage.setItem("psr-fdc-live-chart-hidden", String(hidden));
+  }
+
   return (
     <div className={`app-shell ${plotRailHidden ? "plots-hidden" : ""}`} style={{ "--plot-rail-width": `${plotRailWidth}px` } as CSSProperties}>
       <aside className="left-nav">
@@ -151,6 +157,11 @@ function App() {
             </div>
           </div>
           <div className="project-header-actions">
+            {liveChartHidden ? (
+              <button className="project-show-live-chart" type="button" onClick={() => updateLiveChartHidden(false)}>
+                Show live chart
+              </button>
+            ) : null}
             {plotRailHidden ? (
               <button className="project-show-plots" type="button" onClick={() => updatePlotRailHidden(false)}>
                 Show insights
@@ -160,7 +171,7 @@ function App() {
           </div>
         </header>
 
-        <LiveControlChart compact />
+        {!liveChartHidden ? <LiveControlChart compact onHide={() => updateLiveChartHidden(true)} /> : null}
 
         <header className="page-header">
           <div>
@@ -644,9 +655,10 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
   );
 }
 
-function LiveControlChart({ compact = false }: { compact?: boolean }) {
+function LiveControlChart({ compact = false, onHide }: { compact?: boolean; onHide?: () => void }) {
   const [stream, setStream] = useState<SensorStream | null>(null);
   const [selectedSensor, setSelectedSensor] = useState("");
+  const [selectedStep, setSelectedStep] = useState("All steps");
   const [playhead, setPlayhead] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -673,12 +685,13 @@ function LiveControlChart({ compact = false }: { compact?: boolean }) {
     return () => window.clearInterval(timer);
   }, [isPlaying, speed, stream, viewMode]);
 
-  async function loadStream(sensorName = selectedSensor) {
+  async function loadStream(sensorName = selectedSensor, stepName = selectedStep) {
     setStatus("Loading PM1 sensor stream...");
     try {
-      const result = await fetchSensorStream(sensorName || undefined);
+      const result = await fetchSensorStream(sensorName || undefined, stepName);
       setStream(result);
       setSelectedSensor(result.sensor);
+      setSelectedStep(result.step || "All steps");
       setPlayhead(viewMode === "live" ? Math.max(result.points.length - 1, 0) : 0);
       setStatus(result.mode === "csv_replay" ? "CSV replay ready" : "Live stream connected");
     } catch (error) {
@@ -689,7 +702,13 @@ function LiveControlChart({ compact = false }: { compact?: boolean }) {
   function chooseSensor(sensorName: string) {
     setSelectedSensor(sensorName);
     setIsPlaying(false);
-    void loadStream(sensorName);
+    void loadStream(sensorName, selectedStep);
+  }
+
+  function chooseStep(stepName: string) {
+    setSelectedStep(stepName);
+    setIsPlaying(false);
+    void loadStream(selectedSensor, stepName);
   }
 
   function goLive() {
@@ -730,6 +749,13 @@ function LiveControlChart({ compact = false }: { compact?: boolean }) {
               {stream?.sensors.map((sensorName) => <option key={sensorName}>{sensorName}</option>)}
             </select>
           </label>
+          <label htmlFor="live-step-select">
+            <span>Process step</span>
+            <select id="live-step-select" disabled={!stream?.steps.length} value={selectedStep} onChange={(event) => chooseStep(event.target.value)}>
+              <option>All steps</option>
+              {stream?.steps.map((stepName) => <option key={stepName}>{stepName}</option>)}
+            </select>
+          </label>
           <div className="stream-mode-tabs" role="tablist" aria-label="Stream mode">
             <button className={viewMode === "replay" ? "active" : ""} type="button" onClick={() => {
               setViewMode("replay");
@@ -744,6 +770,11 @@ function LiveControlChart({ compact = false }: { compact?: boolean }) {
           <button className="stream-refresh" type="button" onClick={() => void loadStream()}>
             Refresh stream
           </button>
+          {onHide ? (
+            <button className="live-chart-hide-button" type="button" onClick={onHide}>
+              Hide panel
+            </button>
+          ) : null}
         </div>
 
         <div className="stream-stage">
@@ -810,7 +841,7 @@ function LiveControlChart({ compact = false }: { compact?: boolean }) {
             <article>
               <span>Source mode</span>
               <strong>{viewMode === "live" ? "Live-ready" : "CSV replay"}</strong>
-              <small>{viewMode === "live" ? "Future stream can append samples while keeping DVR history." : "Dataset is played like a timeline before true machine integration."}</small>
+              <small>{selectedStep === "All steps" ? "All recipe steps included in this replay." : `Filtered to process step ${selectedStep}.`}</small>
             </article>
             <article>
               <span>Replay range</span>
