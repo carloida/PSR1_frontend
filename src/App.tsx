@@ -54,6 +54,13 @@ type RealtimeAlert = {
 
 type ContextKind = "error_logs" | "maintenance_notes" | "operator_notes" | "product_material" | "assembly_line" | "physical_properties";
 
+type ChartFocusRequest = {
+  requestId: number;
+  sensor: string;
+  processStep: string;
+  timestamp: string;
+};
+
 function App() {
   const [data, setData] = useState<DashboardData>(mockData);
   const [source, setSource] = useState<"api" | "sample">("sample");
@@ -67,6 +74,7 @@ function App() {
   const [modalPlot, setModalPlot] = useState<PlotFile | undefined>();
   const [plotZoom, setPlotZoom] = useState(100);
   const [liveSignalAlert, setLiveSignalAlert] = useState<RealtimeAlert | undefined>();
+  const [chartFocusRequest, setChartFocusRequest] = useState<ChartFocusRequest | undefined>();
   const [plotRailHidden, setPlotRailHidden] = useState(() => window.localStorage.getItem("psr-fdc-plot-rail-hidden") === "true");
   const [liveChartHidden, setLiveChartHidden] = useState(() => window.localStorage.getItem("psr-fdc-live-chart-hidden") === "true");
   const [plotRailWidth, setPlotRailWidth] = useState(() => {
@@ -142,6 +150,15 @@ function App() {
     window.localStorage.setItem("psr-fdc-live-chart-hidden", String(hidden));
   }
 
+  function focusLiveChart(alert: RealtimeAlert) {
+    setChartFocusRequest({
+      processStep: alert.processStep,
+      requestId: Date.now(),
+      sensor: alert.sensor,
+      timestamp: alert.timestamp
+    });
+  }
+
   return (
     <div className={`app-shell ${plotRailHidden ? "plots-hidden" : ""}`} style={{ "--plot-rail-width": `${plotRailWidth}px` } as CSSProperties}>
       <aside className="left-nav">
@@ -203,8 +220,8 @@ function App() {
 
         {!liveChartHidden ? (
           <>
-            <LiveControlChart compact onHide={() => updateLiveChartHidden(true)} onSignalAlert={setLiveSignalAlert} />
-            <RealtimeAlertDashboard currentAlert={liveSignalAlert} data={data} />
+            <LiveControlChart compact focusRequest={chartFocusRequest} onHide={() => updateLiveChartHidden(true)} onSignalAlert={setLiveSignalAlert} />
+            <RealtimeAlertDashboard currentAlert={liveSignalAlert} data={data} onFocusAlert={focusLiveChart} />
           </>
         ) : null}
 
@@ -692,10 +709,12 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
 
 function LiveControlChart({
   compact = false,
+  focusRequest,
   onHide,
   onSignalAlert
 }: {
   compact?: boolean;
+  focusRequest?: ChartFocusRequest;
   onHide?: () => void;
   onSignalAlert?: (alert: RealtimeAlert | undefined) => void;
 }) {
@@ -711,6 +730,11 @@ function LiveControlChart({
   useEffect(() => {
     void loadStream();
   }, []);
+
+  useEffect(() => {
+    if (!focusRequest) return;
+    void focusStreamOnAlert(focusRequest);
+  }, [focusRequest?.requestId]);
 
   useEffect(() => {
     if (!stream || !isPlaying) return;
@@ -739,6 +763,25 @@ function LiveControlChart({
       setStatus(result.mode === "csv_replay" ? "CSV replay ready" : "Live stream connected");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to load the PM1 sensor stream.");
+    }
+  }
+
+  async function focusStreamOnAlert(request: ChartFocusRequest) {
+    setIsPlaying(false);
+    setViewMode("replay");
+    setStatus(`Loading ${request.sensor} alert window...`);
+    try {
+      let result = await fetchSensorStream(request.sensor, request.processStep);
+      if (!result.points.length && request.processStep !== "All steps") {
+        result = await fetchSensorStream(request.sensor, "All steps");
+      }
+      setStream(result);
+      setSelectedSensor(result.sensor);
+      setSelectedStep(result.step || "All steps");
+      setPlayhead(closestPointIndex(result.points, request.timestamp));
+      setStatus("Focused on selected alert history row");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to focus the selected alert on the chart.");
     }
   }
 
@@ -907,7 +950,15 @@ function LiveControlChart({
   );
 }
 
-function RealtimeAlertDashboard({ currentAlert, data }: { currentAlert?: RealtimeAlert; data: DashboardData }) {
+function RealtimeAlertDashboard({
+  currentAlert,
+  data,
+  onFocusAlert
+}: {
+  currentAlert?: RealtimeAlert;
+  data: DashboardData;
+  onFocusAlert: (alert: RealtimeAlert) => void;
+}) {
   const seedAlerts = useMemo(() => mockRealtimeAlerts(data.windows), [data.windows]);
   const [alerts, setAlerts] = useState<RealtimeAlert[]>(seedAlerts);
   const [selectedAlertId, setSelectedAlertId] = useState("");
@@ -955,10 +1006,15 @@ function RealtimeAlertDashboard({ currentAlert, data }: { currentAlert?: Realtim
     setContextDraft("");
   }
 
+  function selectAlert(alert: RealtimeAlert) {
+    setSelectedAlertId(alert.id);
+    onFocusAlert(alert);
+  }
+
   return (
     <section className="realtime-alert-console" aria-label="Real-time anomaly alert console">
       {bannerAlert ? (
-        <button className={`alert-banner ${bannerAlert.level}`} type="button" onClick={() => setSelectedAlertId(bannerAlert.id)}>
+        <button className={`alert-banner ${bannerAlert.level}`} type="button" onClick={() => selectAlert(bannerAlert)}>
           <span>{formatAlertLevel(bannerAlert.level)}</span>
           <strong>{bannerAlert.sensor}: possible issue</strong>
           <small>
@@ -994,7 +1050,7 @@ function RealtimeAlertDashboard({ currentAlert, data }: { currentAlert?: Realtim
         </Panel>
 
         <Panel title="Recent Alert History" subtitle={`${alerts.length} local alerts; click any row for detail`}>
-          <AlertHistoryTable alerts={alerts} selectedAlertId={activeAlert?.id} onSelect={setSelectedAlertId} />
+          <AlertHistoryTable alerts={alerts} selectedAlertId={activeAlert?.id} onSelect={selectAlert} />
         </Panel>
       </div>
 
@@ -1083,7 +1139,7 @@ function AlertHistoryTable({
   selectedAlertId
 }: {
   alerts: RealtimeAlert[];
-  onSelect: (id: string) => void;
+  onSelect: (alert: RealtimeAlert) => void;
   selectedAlertId?: string;
 }) {
   return (
@@ -1104,7 +1160,7 @@ function AlertHistoryTable({
         </thead>
         <tbody>
           {alerts.slice(0, 10).map((alert) => (
-            <tr className={selectedAlertId === alert.id ? "selected" : ""} key={alert.id} onClick={() => onSelect(alert.id)}>
+            <tr className={selectedAlertId === alert.id ? "selected" : ""} key={alert.id} onClick={() => onSelect(alert)}>
               <td>{preciseTimestamp(alert.timestamp)}</td>
               <td>{alert.sensor}</td>
               <td>{alert.processStep}</td>
@@ -1951,6 +2007,19 @@ function chartGeometry(points: SensorPoint[], summary: SensorStream["summary"]) 
     path,
     upperY: y(summary.upper_3sigma)
   };
+}
+
+function closestPointIndex(points: SensorPoint[], timestamp: string) {
+  if (!points.length) return 0;
+  const target = new Date(timestamp).getTime();
+  if (Number.isNaN(target)) return 0;
+  return points.reduce((bestIndex, point, index) => {
+    const current = new Date(point.timestamp).getTime();
+    const best = new Date(points[bestIndex].timestamp).getTime();
+    if (Number.isNaN(current)) return bestIndex;
+    if (Number.isNaN(best)) return index;
+    return Math.abs(current - target) < Math.abs(best - target) ? index : bestIndex;
+  }, 0);
 }
 
 function weakFault(row: WindowRecord) {
