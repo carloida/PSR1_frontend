@@ -10,7 +10,7 @@ This interface is intentionally separate from the main `carloida/PSR1` backend r
 - review SPC/statistical pseudo-label evidence;
 - compare clean ML anomaly model outputs;
 - browse generated plots and output files;
-- use a token-free deterministic inference-agent placeholder for engineering review.
+- use a deterministic-first inference agent that can optionally call OpenAI from a server-side API route for concise synthesis.
 
 Important framing: PSR1 is not yet a confirmed fault-code classifier because true fault labels are missing. The current prototype is best described as a real-time sensor anomaly detection and explanation system for engineering review.
 
@@ -37,6 +37,18 @@ Set `VITE_API_BASE_URL` if the backend is running somewhere else.
 
 On Windows, `Start-PSR1-Frontend.ps1` starts the frontend server on port `5175` and opens the browser. A Desktop shortcut can point to this script so the UI can be opened without starting Codex.
 
+## Inference Agent Secrets
+
+Never put API keys in `src/` or any browser-visible code. For local work, put secrets in ignored env files such as:
+
+```text
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-5-mini
+OPENAI_MAX_OUTPUT_TOKENS=420
+```
+
+For Vercel, add the same names in Project Settings -> Environment Variables. The frontend sends a compact case file to `/api/agent`; the serverless route reads `OPENAI_API_KEY` from the server environment and calls OpenAI only after the deterministic troubleshooting answer is already generated.
+
 ## Build
 
 ```bash
@@ -51,4 +63,4 @@ The backend logic lives in:
 https://github.com/carloida/PSR1
 ```
 
-The updated project flow includes SPC pseudo-labeling, clean feature engineering, leakage-safe ML anomaly modeling, real-time sensor-window prediction, and deterministic anomaly explanations that can later be extended with an explicit LLM layer.
+The updated project flow includes SPC pseudo-labeling, clean feature engineering, leakage-safe ML anomaly modeling, real-time sensor-window prediction, deterministic anomaly explanations, and an optional economical AI synthesis layer.

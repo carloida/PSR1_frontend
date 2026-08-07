@@ -26,6 +26,29 @@ export type UploadResult = {
   preview_rows: number;
 };
 
+export type AgentAttachmentPayload = {
+  name: string;
+  kind: string;
+  text?: string;
+};
+
+export type AgentChatPayload = {
+  question: string;
+  deterministic_answer: string;
+  deterministic_findings: Record<string, unknown>;
+  screen_context: Record<string, unknown>;
+  attachments: AgentAttachmentPayload[];
+  chat_history: Array<{ role: string; text: string }>;
+};
+
+export type AgentChatResponse = {
+  answer: string;
+  model?: string | null;
+  used_api: boolean;
+  deterministic_answer: string;
+  warning?: string | null;
+};
+
 export async function fetchDashboardData(): Promise<{ data: DashboardData; source: "api" | "sample" }> {
   try {
     const response = await fetch(`${apiBaseUrl}/api/dashboard`);
@@ -88,6 +111,29 @@ export async function fetchSensorStream(sensor?: string, step?: string): Promise
     throw new Error(await readApiError(response));
   }
   return (await response.json()) as SensorStream;
+}
+
+export async function askInferenceAgent(payload: AgentChatPayload): Promise<AgentChatResponse> {
+  const endpoints = [`${apiBaseUrl}/api/agent/chat`, "/api/agent", "http://127.0.0.1:8003/api/agent/chat"];
+  let lastError = "";
+  for (const endpoint of endpoints) {
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        body: JSON.stringify(payload),
+        headers: { "Content-Type": "application/json" },
+        method: "POST"
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "Unable to reach inference endpoint.";
+      continue;
+    }
+    if (response.ok) {
+      return (await response.json()) as AgentChatResponse;
+    }
+    lastError = await readApiError(response);
+  }
+  throw new Error(lastError || "Unable to reach the local or deployed inference agent endpoint.");
 }
 
 async function readApiError(response: Response): Promise<string> {

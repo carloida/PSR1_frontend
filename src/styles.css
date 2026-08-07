@@ -1043,6 +1043,17 @@ tbody tr.selected {
   padding: 0.52rem 0.62rem;
   font-size: 0.78rem;
   line-height: 1.45;
+  white-space: pre-line;
+}
+
+.agent-messages article small {
+  display: block;
+  margin-bottom: 0.28rem;
+  color: rgba(252, 191, 73, 0.86);
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .agent-messages article.agent {

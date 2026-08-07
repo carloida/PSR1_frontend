@@ -1,6 +1,6 @@
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 
-import { apiBaseUrl, fetchDashboardData, fetchSensorStream, runPipelineStep, uploadSourceFile, type PipelineRunResult, type PipelineStep } from "./api";
+import { apiBaseUrl, askInferenceAgent, fetchDashboardData, fetchSensorStream, runPipelineStep, uploadSourceFile, type AgentAttachmentPayload, type PipelineRunResult, type PipelineStep } from "./api";
 import { mockData } from "./mockData";
 import type { DashboardData, DataFile, ModelRow, PlotFile, SensorPoint, SensorStream, WindowRecord } from "./types";
 
@@ -61,6 +61,18 @@ type ChartFocusRequest = {
   timestamp: string;
 };
 
+type LiveChartSnapshot = {
+  sensor: string;
+  processStep: string;
+  timestamp: string;
+  value: number;
+  guardrail: "in_band" | "outside_3sigma";
+  sourceMode: "csv_replay" | "live_edge";
+  progress: string;
+  mean?: number;
+  std?: number;
+};
+
 function App() {
   const [data, setData] = useState<DashboardData>(mockData);
   const [source, setSource] = useState<"api" | "sample">("sample");
@@ -75,6 +87,7 @@ function App() {
   const [plotZoom, setPlotZoom] = useState(100);
   const [liveSignalAlert, setLiveSignalAlert] = useState<RealtimeAlert | undefined>();
   const [chartFocusRequest, setChartFocusRequest] = useState<ChartFocusRequest | undefined>();
+  const [liveChartSnapshot, setLiveChartSnapshot] = useState<LiveChartSnapshot | undefined>();
   const [plotRailHidden, setPlotRailHidden] = useState(() => window.localStorage.getItem("psr-fdc-plot-rail-hidden") === "true");
   const [liveChartHidden, setLiveChartHidden] = useState(() => window.localStorage.getItem("psr-fdc-live-chart-hidden") === "true");
   const [plotRailWidth, setPlotRailWidth] = useState(() => {
@@ -220,7 +233,7 @@ function App() {
 
         {!liveChartHidden ? (
           <>
-            <LiveControlChart compact focusRequest={chartFocusRequest} onHide={() => updateLiveChartHidden(true)} onSignalAlert={setLiveSignalAlert} />
+            <LiveControlChart compact focusRequest={chartFocusRequest} onChartSnapshot={setLiveChartSnapshot} onHide={() => updateLiveChartHidden(true)} onSignalAlert={setLiveSignalAlert} />
             <RealtimeAlertDashboard currentAlert={liveSignalAlert} data={data} onFocusAlert={focusLiveChart} />
           </>
         ) : null}
@@ -243,9 +256,13 @@ function App() {
       {plotRailHidden ? null : (
         <PlotRail
           openPlot={openPlot}
+          data={data}
+          liveChartSnapshot={liveChartSnapshot}
+          liveSignalAlert={liveSignalAlert}
           plotRailWidth={plotRailWidth}
           plots={data.plot_files}
           selectedPlot={selectedPlot}
+          selectedWindow={selectedWindow}
           setPlotRailHidden={updatePlotRailHidden}
           setPlotRailWidth={updatePlotRailWidth}
           setSelectedPlotId={setSelectedPlotId}
@@ -710,11 +727,13 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
 function LiveControlChart({
   compact = false,
   focusRequest,
+  onChartSnapshot,
   onHide,
   onSignalAlert
 }: {
   compact?: boolean;
   focusRequest?: ChartFocusRequest;
+  onChartSnapshot?: (snapshot: LiveChartSnapshot | undefined) => void;
   onHide?: () => void;
   onSignalAlert?: (alert: RealtimeAlert | undefined) => void;
 }) {
@@ -827,10 +846,22 @@ function LiveControlChart({
   useEffect(() => {
     if (!stream || !currentPoint) {
       onSignalAlert?.(undefined);
+      onChartSnapshot?.(undefined);
       return;
     }
     onSignalAlert?.(alertFromSignal(stream, currentPoint));
-  }, [currentPoint, onSignalAlert, stream, selectedStep]);
+    onChartSnapshot?.({
+      guardrail: outsideBand ? "outside_3sigma" : "in_band",
+      mean: stream.summary.mean,
+      processStep: selectedStep,
+      progress: points.length ? `${safePlayhead + 1}/${points.length}` : "-",
+      sensor: selectedSensor,
+      sourceMode: viewMode === "live" ? "live_edge" : "csv_replay",
+      std: stream.summary.std,
+      timestamp: currentPoint.timestamp,
+      value: currentPoint.value
+    });
+  }, [currentPoint, onChartSnapshot, onSignalAlert, outsideBand, points.length, safePlayhead, selectedSensor, selectedStep, stream, viewMode]);
 
   return (
     <div className={compact ? "persistent-live-chart" : ""}>
@@ -1216,60 +1247,117 @@ function FilesPage({ files, openPlot, plots, setSelectedPlotId }: { files: DataF
   );
 }
 
-function ExplainabilityAgent({ onCollapse, plots, selectedPlot }: { onCollapse: () => void; plots: PlotFile[]; selectedPlot?: PlotFile }) {
-  const [messages, setMessages] = useState([
+function ExplainabilityAgent({
+  data,
+  liveChartSnapshot,
+  liveSignalAlert,
+  onCollapse,
+  plots,
+  selectedPlot,
+  selectedWindow
+}: {
+  data: DashboardData;
+  liveChartSnapshot?: LiveChartSnapshot;
+  liveSignalAlert?: RealtimeAlert;
+  onCollapse: () => void;
+  plots: PlotFile[];
+  selectedPlot?: PlotFile;
+  selectedWindow: WindowRecord;
+}) {
+  const [messages, setMessages] = useState<Array<{ role: "agent" | "user"; text: string; meta?: string }>>([
     {
       role: "agent",
-      text: "Ask about the selected window, guardrails, clean ML outputs, generated evidence, logs, or engineering actions. This placeholder represents the deterministic PSR1 explainer; no AI model call is made."
+      meta: "Deterministic first",
+      text: "Ask about the selected window, live control chart, guardrails, clean ML outputs, generated evidence, logs, or engineering actions. I run the hard-coded PSR1 troubleshooting logic first, then use the economical AI layer only when the server key is configured."
     }
   ]);
   const [draft, setDraft] = useState("");
   const [contextFiles, setContextFiles] = useState<File[]>([]);
+  const [isThinking, setIsThinking] = useState(false);
   const promptChips = [
     "Explain this anomaly",
     "Show guardrail evidence",
+    "Summarize multiple signals",
     "What context is missing?"
   ];
 
-  function submitAgentQuestion(value = draft) {
+  async function submitAgentQuestion(value = draft) {
     const question = value.trim();
-    if (!question) return;
+    if (!question || isThinking) return;
+    const caseFile = buildAgentCaseFile({ data, liveChartSnapshot, liveSignalAlert, plots, question, selectedPlot, selectedWindow });
+    const deterministicAnswer = deterministicAgentAnswer(caseFile);
+    const history = messages.slice(-6);
     setMessages((current) => [
       ...current,
       { role: "user", text: question },
       {
         role: "agent",
-        text: `Placeholder response: the inference agent would inspect ${selectedPlot?.title ?? "the selected evidence"}, current dashboard rows, deterministic patterns such as setpoint error, variability, oscillation, drift, trend change, and range excursions, plus any uploaded logs or notes. It would return possible causes, supporting evidence, missing evidence, next questions, and troubleshooting actions without consuming AI tokens.`
+        meta: "Deterministic pass",
+        text: deterministicAnswer
       }
     ]);
     setDraft("");
+    setIsThinking(true);
+    try {
+      const attachments = await readAgentAttachments(contextFiles);
+      const response = await askInferenceAgent({
+        attachments,
+        chat_history: history,
+        deterministic_answer: deterministicAnswer,
+        deterministic_findings: caseFile.deterministicFindings,
+        question,
+        screen_context: caseFile.screenContext
+      });
+      setMessages((current) => [
+        ...current,
+        {
+          role: "agent",
+          meta: response.used_api ? `AI synthesis · ${response.model ?? "configured model"}` : "Deterministic fallback",
+          text: response.answer
+        }
+      ]);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "agent",
+          meta: "Deterministic fallback",
+          text: `The deterministic review is available, but the AI endpoint could not be reached: ${error instanceof Error ? error.message : "unknown error"}.`
+        }
+      ]);
+    } finally {
+      setIsThinking(false);
+    }
   }
 
   return (
-    <section className="agent-card" aria-label="Deterministic inference agent placeholder">
+    <section className="agent-card" aria-label="Inference agent">
       <header>
         <div>
           <p>Inference agent</p>
-          <h2>Deterministic anomaly explainer</h2>
+          <h2>PSR1 analysis copilot</h2>
         </div>
         <div className="agent-header-actions">
-          <span>Token-free</span>
+          <span>{isThinking ? "Synthesizing" : "Deterministic first"}</span>
           <button aria-label="Collapse explainability agent" title="Collapse" type="button" onClick={onCollapse}>-</button>
         </div>
       </header>
 
       <div className="agent-context">
         <span>Selected: {selectedPlot?.title ?? "No plot"}</span>
+        <span>{liveChartSnapshot ? `${liveChartSnapshot.sensor} · Step ${liveChartSnapshot.processStep}` : "Live chart ready"}</span>
         <span>{plots.length} plots indexed</span>
-        <span>Case file ready</span>
+        <span>{liveSignalAlert ? `${formatAlertLevel(liveSignalAlert.level)} alert` : "No active alert"}</span>
       </div>
 
       <div className="agent-messages">
         {messages.map((message, index) => (
           <article className={message.role === "user" ? "user" : "agent"} key={`${message.role}-${index}`}>
+            {message.meta ? <small>{message.meta}</small> : null}
             {message.text}
           </article>
         ))}
+        {isThinking ? <article className="agent"><small>AI layer</small>Checking compact case file...</article> : null}
       </div>
 
       <div className="agent-prompts">
@@ -1313,18 +1401,26 @@ function ExplainabilityAgent({ onCollapse, plots, selectedPlot }: { onCollapse: 
 }
 
 function PlotRail({
+  data,
+  liveChartSnapshot,
+  liveSignalAlert,
   openPlot,
   plotRailWidth,
   plots,
   selectedPlot,
+  selectedWindow,
   setPlotRailHidden,
   setPlotRailWidth,
   setSelectedPlotId
 }: {
+  data: DashboardData;
+  liveChartSnapshot?: LiveChartSnapshot;
+  liveSignalAlert?: RealtimeAlert;
   openPlot: (plot: PlotFile) => void;
   plotRailWidth: number;
   plots: PlotFile[];
   selectedPlot?: PlotFile;
+  selectedWindow: WindowRecord;
   setPlotRailHidden: (hidden: boolean) => void;
   setPlotRailWidth: (width: number) => void;
   setSelectedPlotId: (id: string) => void;
@@ -1491,9 +1587,17 @@ function PlotRail({
         />
       ) : null}
       {agentPanelCollapsed ? (
-        <CollapsedRailPanel count="Token-free" title="Inference agent" onExpand={() => updateAgentPanelCollapsed(false)} />
+        <CollapsedRailPanel count="AI-ready" title="Inference agent" onExpand={() => updateAgentPanelCollapsed(false)} />
       ) : (
-        <ExplainabilityAgent onCollapse={() => updateAgentPanelCollapsed(true)} plots={plots} selectedPlot={selectedPlot} />
+        <ExplainabilityAgent
+          data={data}
+          liveChartSnapshot={liveChartSnapshot}
+          liveSignalAlert={liveSignalAlert}
+          onCollapse={() => updateAgentPanelCollapsed(true)}
+          plots={plots}
+          selectedPlot={selectedPlot}
+          selectedWindow={selectedWindow}
+        />
       )}
     </aside>
   );
@@ -1731,6 +1835,141 @@ function FileTable({ files }: { files: DataFile[] }) {
       </table>
     </div>
   );
+}
+
+function buildAgentCaseFile({
+  data,
+  liveChartSnapshot,
+  liveSignalAlert,
+  plots,
+  question,
+  selectedPlot,
+  selectedWindow
+}: {
+  data: DashboardData;
+  liveChartSnapshot?: LiveChartSnapshot;
+  liveSignalAlert?: RealtimeAlert;
+  plots: PlotFile[];
+  question: string;
+  selectedPlot?: PlotFile;
+  selectedWindow: WindowRecord;
+}) {
+  const topWindows = data.windows
+    .slice()
+    .sort((a, b) => Math.abs(Number(b.z_score ?? 0)) - Math.abs(Number(a.z_score ?? 0)))
+    .slice(0, 6)
+    .map((row) => ({
+      sensor: row.sensor_name,
+      step: row.process_step,
+      target_anomaly: row.target_anomaly,
+      weak_fault_category: row.weak_fault_category,
+      window_start: row.window_start,
+      z_score: row.z_score
+    }));
+  const modelScores = data.model_comparison.slice(0, 8).map((row) => ({
+    accuracy: row.accuracy,
+    f1: row.f1,
+    model: formatModelName(modelDisplayName(row)),
+    precision: row.precision,
+    recall: row.recall,
+    roc_auc: row.roc_auc
+  }));
+  const selectedRules = triggeredRules(selectedWindow);
+  const patterns = inferDeterministicPatterns({ liveChartSnapshot, liveSignalAlert, selectedWindow });
+  const evidence = [
+    liveChartSnapshot ? `Live chart: ${liveChartSnapshot.sensor}, step ${liveChartSnapshot.processStep}, value ${formatNum(liveChartSnapshot.value)}, guardrail ${liveChartSnapshot.guardrail}.` : "",
+    liveSignalAlert ? `Alert: ${formatAlertLevel(liveSignalAlert.level)} with score ${formatMetric(liveSignalAlert.anomalyScore)} and ML probability ${formatMetric(liveSignalAlert.mlProbability)}.` : "",
+    `Selected SPC window: ${selectedWindow.sensor_name}, step ${selectedWindow.process_step}, z-score ${formatMetric(selectedWindow.z_score)}, target_anomaly=${selectedWindow.target_anomaly}.`,
+    selectedRules.length ? `Triggered SPC rules: ${selectedRules.join(", ")}.` : "No explicit SPC rule flag is selected in the current window.",
+    selectedPlot ? `Selected evidence plot: ${selectedPlot.group} / ${selectedPlot.title}.` : ""
+  ].filter(Boolean);
+  const actions = [
+    "Compare neighboring sensors in the same recipe step before treating this as a fault.",
+    "Check operator notes, maintenance events, product/material changes, and recent tool interventions.",
+    "Verify whether deterministic SPC/range guardrails agree with clean ML anomaly probability.",
+    "Escalate for engineering review only if the same pattern persists or affects hotspot steps/sensors."
+  ];
+  return {
+    deterministicFindings: {
+      actions,
+      evidence,
+      patterns,
+      selected_rules: selectedRules
+    },
+    screenContext: {
+      caveat: "This is anomaly evidence, not confirmed fault classification.",
+      current_alert: liveSignalAlert,
+      live_chart: liveChartSnapshot,
+      model_scores: modelScores,
+      overview: data.overview,
+      plot_count: plots.length,
+      question,
+      selected_plot: selectedPlot,
+      selected_window: selectedWindow,
+      top_anomaly_windows: topWindows
+    }
+  };
+}
+
+function deterministicAgentAnswer(caseFile: ReturnType<typeof buildAgentCaseFile>) {
+  const findings = caseFile.deterministicFindings;
+  const context = caseFile.screenContext;
+  const alert = context.current_alert;
+  const liveChart = context.live_chart;
+  const selectedWindow = context.selected_window;
+  const subject = alert?.sensor ?? liveChart?.sensor ?? selectedWindow.sensor_name;
+  const step = alert?.processStep ?? liveChart?.processStep ?? selectedWindow.process_step;
+  return [
+    `Deterministic review first: ${subject} at step ${step} is being treated as anomaly evidence, not confirmed fault classification.`,
+    `Patterns checked: ${findings.patterns.join(", ")}.`,
+    `Supporting evidence: ${findings.evidence.slice(0, 4).join(" ")}`,
+    `Next actions: ${findings.actions.slice(0, 3).join(" ")}`
+  ].join("\n");
+}
+
+function inferDeterministicPatterns({
+  liveChartSnapshot,
+  liveSignalAlert,
+  selectedWindow
+}: {
+  liveChartSnapshot?: LiveChartSnapshot;
+  liveSignalAlert?: RealtimeAlert;
+  selectedWindow: WindowRecord;
+}) {
+  const patterns = new Set<string>();
+  if (liveSignalAlert?.detectedPatterns.length) {
+    liveSignalAlert.detectedPatterns.forEach((pattern) => patterns.add(pattern));
+  }
+  if (liveChartSnapshot?.guardrail === "outside_3sigma" || Number(selectedWindow.is_3sigma_outlier)) {
+    patterns.add("range_guardrail");
+  }
+  if (Math.abs(Number(selectedWindow.window_slope ?? 0)) > 0.15) {
+    patterns.add("trend_change");
+  }
+  if (Number(selectedWindow.window_std ?? 0) > Number(selectedWindow.baseline_std ?? 0) * 1.8) {
+    patterns.add("high_variability");
+  }
+  if (Math.abs(Number(selectedWindow.window_mean ?? 0) - Number(selectedWindow.baseline_mean ?? 0)) > Number(selectedWindow.baseline_std ?? 1) * 1.5) {
+    patterns.add("mean_shift");
+  }
+  if (!patterns.size) {
+    patterns.add("spc_ml_context_review");
+  }
+  return Array.from(patterns).slice(0, 6);
+}
+
+async function readAgentAttachments(files: File[]): Promise<AgentAttachmentPayload[]> {
+  const readable = new Set(["text/plain", "text/markdown", "application/json", "text/csv"]);
+  const output: AgentAttachmentPayload[] = [];
+  for (const file of files.slice(0, 5)) {
+    const canRead = readable.has(file.type) || /\.(txt|md|json|csv)$/i.test(file.name);
+    output.push({
+      kind: canRead ? "text_context" : "file_reference",
+      name: file.name,
+      text: canRead ? (await file.text()).slice(0, 1800) : undefined
+    });
+  }
+  return output;
 }
 
 function alertFromSignal(stream: SensorStream, point: SensorPoint): RealtimeAlert | undefined {
