@@ -1,5 +1,5 @@
 import { mockData } from "./mockData";
-import type { DashboardData } from "./types";
+import type { DashboardData, SensorStream } from "./types";
 
 export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8002";
 
@@ -68,6 +68,23 @@ export async function uploadSourceFile(file: File): Promise<UploadResult> {
     throw new Error(await readApiError(response));
   }
   return (await response.json()) as UploadResult;
+}
+
+export async function fetchSensorStream(sensor?: string): Promise<SensorStream> {
+  const url = new URL(`${apiBaseUrl}/api/live/sensor-stream`);
+  if (sensor) {
+    url.searchParams.set("sensor", sensor);
+  }
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch {
+    throw new Error(`Cannot reach the local PSR1 API at ${apiBaseUrl}. Start the backend on port 8002, or open the dashboard with the Desktop shortcut so frontend and API start together.`);
+  }
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+  return (await response.json()) as SensorStream;
 }
 
 async function readApiError(response: Response): Promise<string> {

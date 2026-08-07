@@ -84,6 +84,30 @@ export type PlotFile = {
   last_modified?: number | null;
 };
 
+export type SensorPoint = {
+  index: number;
+  timestamp: string;
+  value: number;
+};
+
+export type SensorStream = {
+  mode: "csv_replay" | "live_stream";
+  source: string;
+  time_column: string;
+  sensor: string;
+  sensors: string[];
+  points: SensorPoint[];
+  summary: {
+    count: number;
+    mean: number;
+    std: number;
+    min: number;
+    max: number;
+    lower_3sigma: number;
+    upper_3sigma: number;
+  };
+};
+
 export type DashboardData = {
   overview: Overview;
   windows: WindowRecord[];

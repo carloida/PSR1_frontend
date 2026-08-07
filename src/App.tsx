@@ -1,8 +1,8 @@
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 
-import { apiBaseUrl, fetchDashboardData, runPipelineStep, uploadSourceFile, type PipelineRunResult, type PipelineStep } from "./api";
+import { apiBaseUrl, fetchDashboardData, fetchSensorStream, runPipelineStep, uploadSourceFile, type PipelineRunResult, type PipelineStep } from "./api";
 import { mockData } from "./mockData";
-import type { DashboardData, DataFile, ModelRow, PlotFile, WindowRecord } from "./types";
+import type { DashboardData, DataFile, ModelRow, PlotFile, SensorPoint, SensorStream, WindowRecord } from "./types";
 
 type ViewKey = "review" | "ingest" | "windows" | "models" | "files";
 
@@ -568,6 +568,8 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
         <pre className="run-output">{runLog}</pre>
       </Panel>
 
+      <LiveControlChart />
+
       <Panel title="Data Source" subtitle="Choose how PM1 data enters the realtime review loop">
         <div className="source-switch" role="tablist" aria-label="Data source mode">
           <button className={sourceMode === "upload" ? "active" : ""} type="button" onClick={() => setSourceMode("upload")}>
@@ -639,6 +641,176 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
         )}
       </Panel>
     </div>
+  );
+}
+
+function LiveControlChart() {
+  const [stream, setStream] = useState<SensorStream | null>(null);
+  const [selectedSensor, setSelectedSensor] = useState("");
+  const [playhead, setPlayhead] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [viewMode, setViewMode] = useState<"replay" | "live">("replay");
+  const [status, setStatus] = useState("Loading PM1 sensor stream...");
+
+  useEffect(() => {
+    void loadStream();
+  }, []);
+
+  useEffect(() => {
+    if (!stream || !isPlaying) return;
+    const timer = window.setInterval(() => {
+      setPlayhead((current) => {
+        const lastIndex = Math.max(stream.points.length - 1, 0);
+        const next = Math.min(current + speed, lastIndex);
+        if (next >= lastIndex && viewMode === "replay") {
+          window.clearInterval(timer);
+          setIsPlaying(false);
+        }
+        return next;
+      });
+    }, 260);
+    return () => window.clearInterval(timer);
+  }, [isPlaying, speed, stream, viewMode]);
+
+  async function loadStream(sensorName = selectedSensor) {
+    setStatus("Loading PM1 sensor stream...");
+    try {
+      const result = await fetchSensorStream(sensorName || undefined);
+      setStream(result);
+      setSelectedSensor(result.sensor);
+      setPlayhead(viewMode === "live" ? Math.max(result.points.length - 1, 0) : 0);
+      setStatus(result.mode === "csv_replay" ? "CSV replay ready" : "Live stream connected");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to load the PM1 sensor stream.");
+    }
+  }
+
+  function chooseSensor(sensorName: string) {
+    setSelectedSensor(sensorName);
+    setIsPlaying(false);
+    void loadStream(sensorName);
+  }
+
+  function goLive() {
+    if (!stream) return;
+    setViewMode("live");
+    setPlayhead(Math.max(stream.points.length - 1, 0));
+    setIsPlaying(true);
+  }
+
+  const points = stream?.points ?? [];
+  const lastIndex = Math.max(points.length - 1, 0);
+  const safePlayhead = Math.min(playhead, lastIndex);
+  const currentPoint = points[safePlayhead];
+  const windowStart = Math.max(0, safePlayhead - 180);
+  const visiblePoints = points.slice(windowStart, safePlayhead + 1);
+  const chart = stream ? chartGeometry(visiblePoints, stream.summary) : null;
+  const atLiveEdge = safePlayhead >= Math.max(lastIndex - 1, 0);
+  const outsideBand = Boolean(
+    stream &&
+      currentPoint &&
+      (currentPoint.value > stream.summary.upper_3sigma || currentPoint.value < stream.summary.lower_3sigma)
+  );
+
+  return (
+    <Panel title="Live Sensor Control Chart" subtitle="Replay uploaded CSV data now; prepared for future historian or machine streaming">
+      <section className="live-control-shell">
+        <div className="stream-toolbar">
+          <label htmlFor="live-sensor-select">
+            <span>Sensor</span>
+            <select id="live-sensor-select" disabled={!stream?.sensors.length} value={selectedSensor} onChange={(event) => chooseSensor(event.target.value)}>
+              {stream?.sensors.map((sensorName) => <option key={sensorName}>{sensorName}</option>)}
+            </select>
+          </label>
+          <div className="stream-mode-tabs" role="tablist" aria-label="Stream mode">
+            <button className={viewMode === "replay" ? "active" : ""} type="button" onClick={() => {
+              setViewMode("replay");
+              setIsPlaying(false);
+            }}>
+              Replay CSV
+            </button>
+            <button className={viewMode === "live" ? "active" : ""} type="button" onClick={goLive}>
+              <span className="live-dot" /> Live edge
+            </button>
+          </div>
+          <button className="stream-refresh" type="button" onClick={() => void loadStream()}>
+            Refresh stream
+          </button>
+        </div>
+
+        <div className="stream-stage">
+          <div className="stream-chart-card">
+            <div className="stream-status-row">
+              <div>
+                <span className={viewMode === "live" && atLiveEdge ? "live-pill on" : "live-pill"}>
+                  {viewMode === "live" && atLiveEdge ? "LIVE" : "REPLAY"}
+                </span>
+                <strong>{currentPoint ? shortDate(currentPoint.timestamp) : status}</strong>
+              </div>
+              <small>{atLiveEdge ? "At latest available sample" : "Viewing history"}</small>
+            </div>
+
+            <div className="chart-shell">
+              {chart && visiblePoints.length ? (
+                <svg aria-label={`${selectedSensor} control chart`} className="control-chart" role="img" viewBox="0 0 720 260">
+                  <rect className="control-band" x="48" y={chart.upperY} width="632" height={Math.max(chart.lowerY - chart.upperY, 1)} />
+                  <line className="control-line upper" x1="48" x2="680" y1={chart.upperY} y2={chart.upperY} />
+                  <line className="control-line mean" x1="48" x2="680" y1={chart.meanY} y2={chart.meanY} />
+                  <line className="control-line lower" x1="48" x2="680" y1={chart.lowerY} y2={chart.lowerY} />
+                  <path className="control-path" d={chart.path} />
+                  {chart.latest ? <circle className={outsideBand ? "latest-dot alert" : "latest-dot"} cx={chart.latest.x} cy={chart.latest.y} r="5.5" /> : null}
+                </svg>
+              ) : (
+                <div className="empty">{status}</div>
+              )}
+            </div>
+
+            <div className="stream-controls">
+              <button type="button" disabled={!points.length} onClick={() => setIsPlaying((value) => !value)}>
+                {isPlaying ? "Pause" : "Play"}
+              </button>
+              <input
+                aria-label="Replay timeline"
+                disabled={!points.length}
+                max={lastIndex}
+                min={0}
+                type="range"
+                value={safePlayhead}
+                onChange={(event) => {
+                  setPlayhead(Number(event.target.value));
+                  setIsPlaying(false);
+                }}
+              />
+              <select aria-label="Replay speed" value={speed} onChange={(event) => setSpeed(Number(event.target.value))}>
+                <option value={1}>1x</option>
+                <option value={2}>2x</option>
+                <option value={4}>4x</option>
+                <option value={8}>8x</option>
+              </select>
+            </div>
+          </div>
+
+          <aside className="stream-side">
+            <article className={outsideBand ? "alert" : "ok"}>
+              <span>Guardrail</span>
+              <strong>{outsideBand ? "Outside 3-sigma band" : "Within replay band"}</strong>
+              <small>{currentPoint ? `${formatNum(currentPoint.value)} current value` : status}</small>
+            </article>
+            <article>
+              <span>Source mode</span>
+              <strong>{viewMode === "live" ? "Live-ready" : "CSV replay"}</strong>
+              <small>{viewMode === "live" ? "Future stream can append samples while keeping DVR history." : "Dataset is played like a timeline before true machine integration."}</small>
+            </article>
+            <article>
+              <span>Replay range</span>
+              <strong>{points.length ? `${safePlayhead + 1} / ${points.length}` : "-"}</strong>
+              <small>{stream ? `${formatNum(stream.summary.mean)} mean, ${formatNum(stream.summary.std)} std` : "Waiting for sensor metadata"}</small>
+            </article>
+          </aside>
+        </div>
+      </section>
+    </Panel>
   );
 }
 
@@ -1180,6 +1352,40 @@ function FileTable({ files }: { files: DataFile[] }) {
       </table>
     </div>
   );
+}
+
+function chartGeometry(points: SensorPoint[], summary: SensorStream["summary"]) {
+  const width = 720;
+  const height = 260;
+  const pad = { top: 18, right: 40, bottom: 26, left: 48 };
+  const values = points.map((point) => Number(point.value)).filter(Number.isFinite);
+  const rawMin = Math.min(...values, summary.lower_3sigma, summary.min);
+  const rawMax = Math.max(...values, summary.upper_3sigma, summary.max);
+  const span = rawMax - rawMin || 1;
+  const min = rawMin - span * 0.08;
+  const max = rawMax + span * 0.08;
+
+  function x(index: number) {
+    if (points.length <= 1) return pad.left;
+    return pad.left + (index / (points.length - 1)) * (width - pad.left - pad.right);
+  }
+
+  function y(value: number) {
+    return pad.top + ((max - value) / (max - min)) * (height - pad.top - pad.bottom);
+  }
+
+  const path = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ${y(Number(point.value)).toFixed(2)}`)
+    .join(" ");
+  const latest = points.length ? { x: x(points.length - 1), y: y(Number(points[points.length - 1].value)) } : null;
+
+  return {
+    latest,
+    lowerY: y(summary.lower_3sigma),
+    meanY: y(summary.mean),
+    path,
+    upperY: y(summary.upper_3sigma)
+  };
 }
 
 function weakFault(row: WindowRecord) {
