@@ -24,6 +24,35 @@ const rules: Array<{ key: keyof WindowRecord; label: string }> = [
 const DEFAULT_PLOT_RAIL_WIDTH = 400;
 const MIN_PLOT_RAIL_WIDTH = 320;
 const MAX_PLOT_RAIL_WIDTH = 760;
+const HOTSPOT_STEPS = ["4", "10", "11", "5", "17", "8", "6", "2"];
+const HOTSPOT_SENSORS = ["TC301温度", "TC107温度", "TC100温度", "TC609加热温度", "E100功率反馈", "TC103温度", "TC104温度", "TC205流段温度"];
+
+type AlertLevel = "watch" | "warning" | "alarm";
+type AlertReviewStatus = "new" | "acknowledged" | "needs_engineer_review" | "likely_false_alarm";
+
+type RealtimeAlert = {
+  id: string;
+  timestamp: string;
+  sensor: string;
+  processStep: string;
+  level: AlertLevel;
+  anomalyScore: number;
+  mlProbability: number;
+  rangeAnomaly: boolean;
+  triggeredFeatures: string[];
+  detectedPatterns: string[];
+  featureEvidence: Array<{ feature: string; evidence: string }>;
+  possibleCauses: string[];
+  recommendedActions: string[];
+  missingEvidence: string[];
+  nextQuestions: string[];
+  hotspot: boolean;
+  status: AlertReviewStatus;
+  notes: string[];
+  context: Partial<Record<ContextKind, string>>;
+};
+
+type ContextKind = "error_logs" | "maintenance_notes" | "operator_notes" | "product_material" | "assembly_line" | "physical_properties";
 
 function App() {
   const [data, setData] = useState<DashboardData>(mockData);
@@ -37,6 +66,7 @@ function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [modalPlot, setModalPlot] = useState<PlotFile | undefined>();
   const [plotZoom, setPlotZoom] = useState(100);
+  const [liveSignalAlert, setLiveSignalAlert] = useState<RealtimeAlert | undefined>();
   const [plotRailHidden, setPlotRailHidden] = useState(() => window.localStorage.getItem("psr-fdc-plot-rail-hidden") === "true");
   const [liveChartHidden, setLiveChartHidden] = useState(() => window.localStorage.getItem("psr-fdc-live-chart-hidden") === "true");
   const [plotRailWidth, setPlotRailWidth] = useState(() => {
@@ -171,7 +201,9 @@ function App() {
           </div>
         </header>
 
-        {!liveChartHidden ? <LiveControlChart compact onHide={() => updateLiveChartHidden(true)} /> : null}
+        {!liveChartHidden ? <LiveControlChart compact onHide={() => updateLiveChartHidden(true)} onSignalAlert={setLiveSignalAlert} /> : null}
+
+        <RealtimeAlertDashboard currentAlert={liveSignalAlert} data={data} />
 
         <header className="page-header">
           <div>
@@ -655,7 +687,15 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
   );
 }
 
-function LiveControlChart({ compact = false, onHide }: { compact?: boolean; onHide?: () => void }) {
+function LiveControlChart({
+  compact = false,
+  onHide,
+  onSignalAlert
+}: {
+  compact?: boolean;
+  onHide?: () => void;
+  onSignalAlert?: (alert: RealtimeAlert | undefined) => void;
+}) {
   const [stream, setStream] = useState<SensorStream | null>(null);
   const [selectedSensor, setSelectedSensor] = useState("");
   const [selectedStep, setSelectedStep] = useState("All steps");
@@ -737,6 +777,14 @@ function LiveControlChart({ compact = false, onHide }: { compact?: boolean; onHi
       currentPoint &&
       (currentPoint.value > stream.summary.upper_3sigma || currentPoint.value < stream.summary.lower_3sigma)
   );
+
+  useEffect(() => {
+    if (!stream || !currentPoint) {
+      onSignalAlert?.(undefined);
+      return;
+    }
+    onSignalAlert?.(alertFromSignal(stream, currentPoint));
+  }, [currentPoint, onSignalAlert, stream, selectedStep]);
 
   return (
     <div className={compact ? "persistent-live-chart" : ""}>
@@ -853,6 +901,233 @@ function LiveControlChart({ compact = false, onHide }: { compact?: boolean; onHi
       </section>
     </Panel>
     </div>
+  );
+}
+
+function RealtimeAlertDashboard({ currentAlert, data }: { currentAlert?: RealtimeAlert; data: DashboardData }) {
+  const seedAlerts = useMemo(() => mockRealtimeAlerts(data.windows), [data.windows]);
+  const [alerts, setAlerts] = useState<RealtimeAlert[]>(seedAlerts);
+  const [selectedAlertId, setSelectedAlertId] = useState(seedAlerts[0]?.id ?? "");
+  const [contextKind, setContextKind] = useState<ContextKind>("operator_notes");
+  const [contextDraft, setContextDraft] = useState("");
+  const [noteDraft, setNoteDraft] = useState("");
+
+  useEffect(() => {
+    setAlerts((current) => {
+      const liveAlerts = current.filter((alert) => !alert.id.includes("-window-"));
+      const next = mergeAlerts(liveAlerts, seedAlerts);
+      setSelectedAlertId((selected) => (next.some((alert) => alert.id === selected) ? selected : next[0]?.id ?? ""));
+      return next;
+    });
+  }, [seedAlerts]);
+
+  useEffect(() => {
+    if (!currentAlert) return;
+    setAlerts((current) => mergeAlerts([currentAlert], current));
+    setSelectedAlertId((current) => current || currentAlert.id);
+  }, [currentAlert]);
+
+  const activeAlert = alerts.find((alert) => alert.id === selectedAlertId) ?? alerts[0];
+  const bannerAlert = currentAlert ?? alerts.find((alert) => alert.status === "new") ?? alerts[0];
+
+  function updateAlert(id: string, updater: (alert: RealtimeAlert) => RealtimeAlert) {
+    setAlerts((current) => current.map((alert) => (alert.id === id ? updater(alert) : alert)));
+  }
+
+  function setReviewStatus(status: AlertReviewStatus) {
+    if (!activeAlert) return;
+    updateAlert(activeAlert.id, (alert) => ({ ...alert, status }));
+  }
+
+  function addNote() {
+    const note = noteDraft.trim();
+    if (!activeAlert || !note) return;
+    updateAlert(activeAlert.id, (alert) => ({ ...alert, notes: [...alert.notes, note] }));
+    setNoteDraft("");
+  }
+
+  function addContext() {
+    const context = contextDraft.trim();
+    if (!activeAlert || !context) return;
+    updateAlert(activeAlert.id, (alert) => refreshExplanationWithContext(alert, contextKind, context));
+    setContextDraft("");
+  }
+
+  return (
+    <section className="realtime-alert-console" aria-label="Real-time anomaly alert console">
+      {bannerAlert ? (
+        <button className={`alert-banner ${bannerAlert.level}`} type="button" onClick={() => setSelectedAlertId(bannerAlert.id)}>
+          <span>{formatAlertLevel(bannerAlert.level)}</span>
+          <strong>{bannerAlert.sensor}: possible issue</strong>
+          <small>
+            Step {bannerAlert.processStep} · score {formatMetric(bannerAlert.anomalyScore)} · ML {formatMetric(bannerAlert.mlProbability)} · {preciseTimestamp(bannerAlert.timestamp)}
+          </small>
+          {bannerAlert.hotspot ? <em>Historical hotspot</em> : null}
+        </button>
+      ) : (
+        <div className="alert-banner idle">
+          <span>Monitoring</span>
+          <strong>No current anomaly evidence above watch threshold</strong>
+          <small>This is anomaly evidence, not confirmed fault classification.</small>
+        </div>
+      )}
+
+      <div className="alert-grid">
+        <Panel title="Hotspot Awareness" subtitle="Historical PM1 anomaly concentration">
+          <div className="hotspot-panel">
+            <div>
+              <strong>Recipe steps</strong>
+              <div className="hotspot-chips">
+                {HOTSPOT_STEPS.map((item) => <span className={bannerAlert?.processStep === item ? "active" : ""} key={item}>Step {item}</span>)}
+              </div>
+            </div>
+            <div>
+              <strong>Affected sensors</strong>
+              <div className="hotspot-chips sensors">
+                {HOTSPOT_SENSORS.map((item) => <span className={bannerAlert?.sensor === item ? "active" : ""} key={item}>{item}</span>)}
+              </div>
+            </div>
+            <p>This is anomaly evidence, not confirmed fault classification.</p>
+          </div>
+        </Panel>
+
+        <Panel title="Recent Alert History" subtitle={`${alerts.length} local alerts; click any row for detail`}>
+          <AlertHistoryTable alerts={alerts} selectedAlertId={activeAlert?.id} onSelect={setSelectedAlertId} />
+        </Panel>
+      </div>
+
+      {activeAlert ? (
+        <section className={`alert-detail-drawer ${activeAlert.level}`}>
+          <header>
+            <div>
+              <p>{formatAlertLevel(activeAlert.level)} anomaly detected</p>
+              <h2>{activeAlert.sensor} · Step {activeAlert.processStep}</h2>
+              <span>This is anomaly evidence, not confirmed fault classification.</span>
+            </div>
+            <button type="button" onClick={() => setSelectedAlertId("")}>Close</button>
+          </header>
+
+          <div className="alert-detail-layout">
+            <div className="alert-detail-main">
+              <div className="alert-score-grid">
+                <Metric label="Anomaly score" value={formatMetric(activeAlert.anomalyScore)} tone={activeAlert.level === "alarm" ? "warn" : undefined} />
+                <Metric label="ML probability" value={formatMetric(activeAlert.mlProbability)} />
+                <Metric label="Range guardrail" value={activeAlert.rangeAnomaly ? "Triggered" : "Clear"} tone={activeAlert.rangeAnomaly ? "warn" : undefined} />
+                <Metric label="Review status" value={formatReviewStatus(activeAlert.status)} />
+              </div>
+
+              <div className="alert-section-grid">
+                <AlertList title="Triggered features" items={activeAlert.triggeredFeatures} />
+                <AlertList title="Detected patterns" items={activeAlert.detectedPatterns} />
+                <AlertList title="Possible causes" items={activeAlert.possibleCauses} />
+                <AlertList title="Recommended actions" items={activeAlert.recommendedActions} />
+                <AlertList title="Missing evidence" items={activeAlert.missingEvidence} />
+                <AlertList title="Next questions" items={activeAlert.nextQuestions} />
+              </div>
+
+              <div className="feature-evidence-list">
+                <h3>Feature evidence</h3>
+                {activeAlert.featureEvidence.map((item) => (
+                  <article key={`${activeAlert.id}-${item.feature}-${item.evidence}`}>
+                    <strong>{item.feature}</strong>
+                    <span>{item.evidence}</span>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <aside className="alert-review-panel">
+              <div className="review-actions">
+                <button type="button" onClick={() => setReviewStatus("acknowledged")}>Acknowledge</button>
+                <button type="button" onClick={() => setReviewStatus("needs_engineer_review")}>Needs engineer review</button>
+                <button type="button" onClick={() => setReviewStatus("likely_false_alarm")}>Likely false alarm</button>
+              </div>
+
+              <label>
+                <span>Add context</span>
+                <select value={contextKind} onChange={(event) => setContextKind(event.target.value as ContextKind)}>
+                  <option value="error_logs">Error logs</option>
+                  <option value="maintenance_notes">Maintenance notes</option>
+                  <option value="operator_notes">Operator notes</option>
+                  <option value="product_material">Product/material description</option>
+                  <option value="assembly_line">Assembly/process-line notes</option>
+                  <option value="physical_properties">Physical property notes</option>
+                </select>
+              </label>
+              <textarea value={contextDraft} placeholder="Paste relevant context for the deterministic explainer..." onChange={(event) => setContextDraft(event.target.value)} />
+              <button type="button" onClick={addContext}>Refresh explanation</button>
+
+              <label>
+                <span>Add note</span>
+                <textarea value={noteDraft} placeholder="Local review note..." onChange={(event) => setNoteDraft(event.target.value)} />
+              </label>
+              <button type="button" onClick={addNote}>Add note</button>
+
+              <div className="notes-list">
+                <strong>{activeAlert.notes.length} notes</strong>
+                {activeAlert.notes.map((note, index) => <span key={`${activeAlert.id}-note-${index}`}>{note}</span>)}
+              </div>
+            </aside>
+          </div>
+        </section>
+      ) : null}
+    </section>
+  );
+}
+
+function AlertHistoryTable({
+  alerts,
+  onSelect,
+  selectedAlertId
+}: {
+  alerts: RealtimeAlert[];
+  onSelect: (id: string) => void;
+  selectedAlertId?: string;
+}) {
+  return (
+    <div className="table-wrap alert-history-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Sensor</th>
+            <th>Step</th>
+            <th>Level</th>
+            <th>Score</th>
+            <th>ML prob.</th>
+            <th>Top pattern</th>
+            <th>Status</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {alerts.slice(0, 10).map((alert) => (
+            <tr className={selectedAlertId === alert.id ? "selected" : ""} key={alert.id} onClick={() => onSelect(alert.id)}>
+              <td>{preciseTimestamp(alert.timestamp)}</td>
+              <td>{alert.sensor}</td>
+              <td>{alert.processStep}</td>
+              <td><span className={`badge severity ${alert.level}`}>{formatAlertLevel(alert.level)}</span></td>
+              <td>{formatMetric(alert.anomalyScore)}</td>
+              <td>{formatMetric(alert.mlProbability)}</td>
+              <td>{alert.detectedPatterns[0] ?? "-"}</td>
+              <td>{formatReviewStatus(alert.status)}</td>
+              <td>{alert.notes.length}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AlertList({ items, title }: { items: string[]; title: string }) {
+  return (
+    <article>
+      <h3>{title}</h3>
+      <ul>
+        {items.map((item) => <li key={`${title}-${item}`}>{item}</li>)}
+      </ul>
+    </article>
   );
 }
 
@@ -1394,6 +1669,252 @@ function FileTable({ files }: { files: DataFile[] }) {
       </table>
     </div>
   );
+}
+
+function alertFromSignal(stream: SensorStream, point: SensorPoint): RealtimeAlert | undefined {
+  const std = Number(stream.summary.std) || 1;
+  const z = Math.abs((Number(point.value) - Number(stream.summary.mean)) / std);
+  const rangeAnomaly = Number(point.value) > stream.summary.upper_3sigma || Number(point.value) < stream.summary.lower_3sigma;
+  const hotspot = isHotspot(stream.sensor, stream.step);
+  const anomalyScore = clamp01((z / 3.1) + (rangeAnomaly ? 0.22 : 0) + (hotspot && z > 0.8 ? 0.08 : 0));
+  const mlProbability = clamp01((anomalyScore * 0.9) + (hotspot ? 0.05 : 0));
+  const level = alertLevel(anomalyScore, mlProbability, rangeAnomaly);
+  if (!level) return undefined;
+  return buildAlert({
+    anomalyScore,
+    level,
+    mlProbability,
+    rangeAnomaly,
+    sensor: stream.sensor,
+    processStep: stream.step || "All steps",
+    timestamp: point.timestamp,
+    value: point.value,
+    windowMean: stream.summary.mean,
+    windowStd: std,
+    zScore: z
+  });
+}
+
+function mockRealtimeAlerts(rows: WindowRecord[]) {
+  return rows
+    .filter((row) => Number(row.target_anomaly) === 1 || Math.abs(Number(row.z_score ?? 0)) >= 2)
+    .sort((a, b) => Math.abs(Number(b.z_score ?? 0)) - Math.abs(Number(a.z_score ?? 0)))
+    .slice(0, 10)
+    .map((row, index) => {
+      const z = Math.abs(Number(row.z_score ?? 0));
+      const rangeAnomaly = Boolean(Number(row.is_3sigma_outlier) || Number(row.is_iqr_outlier));
+      const anomalyScore = clamp01(Math.max(0.35, z / 5));
+      const mlProbability = clamp01(Number(row.weak_fault_confidence ?? anomalyScore * 0.92));
+      return buildAlert({
+        anomalyScore,
+        level: alertLevel(anomalyScore, mlProbability, rangeAnomaly) ?? "watch",
+        mlProbability,
+        rangeAnomaly,
+        sensor: row.sensor_name,
+        processStep: String(row.process_step),
+        timestamp: row.window_start,
+        value: row.window_mean,
+        windowMean: row.window_mean,
+        windowStd: row.window_std,
+        zScore: z,
+        idSuffix: `window-${index}`
+      });
+    });
+}
+
+function buildAlert({
+  anomalyScore,
+  idSuffix = "live",
+  level,
+  mlProbability,
+  processStep,
+  rangeAnomaly,
+  sensor,
+  timestamp,
+  value,
+  windowMean,
+  windowStd,
+  zScore
+}: {
+  anomalyScore: number;
+  idSuffix?: string;
+  level: AlertLevel;
+  mlProbability: number;
+  processStep: string;
+  rangeAnomaly: boolean;
+  sensor: string;
+  timestamp: string;
+  value?: number;
+  windowMean?: number;
+  windowStd?: number;
+  zScore: number;
+}): RealtimeAlert {
+  const hotspot = isHotspot(sensor, processStep);
+  const detectedPatterns = detectedAlertPatterns({ rangeAnomaly, sensor, windowStd, zScore });
+  const triggeredFeatures = [
+    zScore >= 1.4 ? "mean_shift" : "",
+    Number(windowStd ?? 0) > 0 ? "window_std" : "",
+    rangeAnomaly ? "range_guardrail" : "",
+    hotspot ? "historical_hotspot" : ""
+  ].filter(Boolean);
+  return {
+    id: `${timestamp}-${sensor}-${processStep}-${idSuffix}`,
+    anomalyScore,
+    context: {},
+    detectedPatterns,
+    featureEvidence: [
+      { feature: "anomaly_score", evidence: `Anomaly score is ${formatMetric(anomalyScore)}; combined evidence reached ${formatAlertLevel(level).toLowerCase()} level.` },
+      { feature: "ml_probability", evidence: `ML probability estimate is ${formatMetric(mlProbability)}.` },
+      { feature: "z_score", evidence: `Absolute z-style deviation is ${formatMetric(zScore)}.` },
+      { feature: "current_value", evidence: value === undefined ? "Current signal value was not supplied." : `Current value is ${formatNum(value)} versus local mean ${formatNum(windowMean)}.` },
+      ...(hotspot ? [{ feature: "historical_hotspot", evidence: `${sensor} or step ${processStep} appears in historical anomaly hotspots.` }] : [])
+    ],
+    hotspot,
+    level,
+    missingEvidence: [
+      "Tool/chamber event log around this timestamp",
+      "Maintenance or calibration notes",
+      "Lot/product and recipe context",
+      "Operator observation at the equipment"
+    ],
+    mlProbability,
+    nextQuestions: [
+      "Did this step recently change recipe timing or setpoint?",
+      "Was maintenance performed before this run?",
+      "Do neighboring sensors show the same pattern?",
+      "Is the deviation repeating across lots or isolated?"
+    ],
+    notes: [],
+    possibleCauses: possibleAlertCauses(detectedPatterns, sensor),
+    processStep,
+    rangeAnomaly,
+    recommendedActions: recommendedAlertActions(detectedPatterns, rangeAnomaly),
+    sensor,
+    status: "new",
+    timestamp,
+    triggeredFeatures
+  };
+}
+
+function mergeAlerts(primary: RealtimeAlert[], secondary: RealtimeAlert[]) {
+  const byId = new Map<string, RealtimeAlert>();
+  for (const alert of secondary) {
+    byId.set(alert.id, alert);
+  }
+  for (const alert of primary) {
+    const existing = byId.get(alert.id);
+    byId.set(alert.id, existing ? { ...alert, context: existing.context, notes: existing.notes, status: existing.status } : alert);
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 18);
+}
+
+function refreshExplanationWithContext(alert: RealtimeAlert, contextKind: ContextKind, context: string): RealtimeAlert {
+  const label = formatContextKind(contextKind);
+  return {
+    ...alert,
+    context: { ...alert.context, [contextKind]: context },
+    featureEvidence: [
+      { feature: label, evidence: context },
+      ...alert.featureEvidence.filter((item) => item.feature !== label)
+    ],
+    missingEvidence: alert.missingEvidence.filter((item) => !item.toLowerCase().includes(label.toLowerCase().split(" ")[0])),
+    nextQuestions: [
+      `Does the added ${label.toLowerCase()} support or contradict the sensor pattern?`,
+      ...alert.nextQuestions.filter((item) => !item.includes(label))
+    ],
+    notes: [...alert.notes, `${label} added; deterministic explanation refreshed locally.`]
+  };
+}
+
+function alertLevel(anomalyScore: number, mlProbability: number, rangeAnomaly: boolean): AlertLevel | undefined {
+  if (rangeAnomaly || anomalyScore >= 0.75 || mlProbability >= 0.75) return "alarm";
+  if (anomalyScore >= 0.55 || mlProbability >= 0.55) return "warning";
+  if (anomalyScore >= 0.35 || mlProbability >= 0.35) return "watch";
+  return undefined;
+}
+
+function detectedAlertPatterns({
+  rangeAnomaly,
+  sensor,
+  windowStd,
+  zScore
+}: {
+  rangeAnomaly: boolean;
+  sensor: string;
+  windowStd?: number;
+  zScore: number;
+}) {
+  const patterns = [
+    rangeAnomaly ? "range_guardrail" : "",
+    zScore >= 2.5 ? "mean_shift" : "",
+    zScore >= 1.6 && zScore < 2.5 ? "trend_change" : "",
+    Number(windowStd ?? 0) > 1 ? "high_variability" : "",
+    sensor.includes("功率") ? "setpoint_tracking_error" : "",
+    sensor.includes("温度") && Number(windowStd ?? 0) > 0.5 ? "oscillation" : ""
+  ].filter(Boolean);
+  return unique(patterns.length ? patterns : ["mean_shift"]);
+}
+
+function possibleAlertCauses(patterns: string[], sensor: string) {
+  const causes = [
+    patterns.includes("setpoint_tracking_error") ? "Controller or actuator may be lagging the setpoint." : "",
+    patterns.includes("high_variability") || patterns.includes("oscillation") ? "Signal instability may indicate tuning, heater, or flow variation." : "",
+    patterns.includes("range_guardrail") ? "Observed value crossed deterministic SPC/range guardrail." : "",
+    sensor.includes("温度") ? "Temperature control drift or heater response change may be contributing." : "",
+    "Recipe-step context or product conditions may explain part of the deviation."
+  ].filter(Boolean);
+  return unique(causes);
+}
+
+function recommendedAlertActions(patterns: string[], rangeAnomaly: boolean) {
+  return [
+    "Compare adjacent sensors in the same time window.",
+    rangeAnomaly ? "Review guardrail threshold crossing before continuing unattended operation." : "Keep monitoring through the next few windows.",
+    patterns.includes("setpoint_tracking_error") ? "Check setpoint versus feedback traces and controller state." : "",
+    patterns.includes("high_variability") ? "Inspect variability against recent maintenance and recipe transitions." : "",
+    "Attach logs or operator notes to refresh deterministic explanation."
+  ].filter(Boolean);
+}
+
+function isHotspot(sensor: string, processStep: string) {
+  return HOTSPOT_SENSORS.includes(sensor) || HOTSPOT_STEPS.includes(String(processStep));
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+}
+
+function formatAlertLevel(level: AlertLevel) {
+  const labels: Record<AlertLevel, string> = {
+    alarm: "Alarm",
+    warning: "Warning",
+    watch: "Watch"
+  };
+  return labels[level];
+}
+
+function formatReviewStatus(status: AlertReviewStatus) {
+  const labels: Record<AlertReviewStatus, string> = {
+    acknowledged: "Acknowledged",
+    likely_false_alarm: "Likely false alarm",
+    needs_engineer_review: "Needs engineer review",
+    new: "New"
+  };
+  return labels[status];
+}
+
+function formatContextKind(kind: ContextKind) {
+  const labels: Record<ContextKind, string> = {
+    assembly_line: "Assembly/process-line notes",
+    error_logs: "Error logs",
+    maintenance_notes: "Maintenance notes",
+    operator_notes: "Operator notes",
+    physical_properties: "Physical property notes",
+    product_material: "Product/material description"
+  };
+  return labels[kind];
 }
 
 function chartGeometry(points: SensorPoint[], summary: SensorStream["summary"]) {
