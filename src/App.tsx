@@ -834,7 +834,7 @@ function LiveControlChart({
 
   return (
     <div className={compact ? "persistent-live-chart" : ""}>
-    <Panel title="Live Sensor Control Chart" subtitle="Replay uploaded CSV data now; prepared for future historian or machine streaming">
+    <Panel title="Live Sensor Control Chart" subtitle="CSV replay now; live historian streaming ready">
       <section className="live-control-shell">
         <div className="stream-toolbar">
           <label htmlFor="live-sensor-select">
@@ -883,6 +883,29 @@ function LiveControlChart({
               <small>{atLiveEdge ? "At latest available sample" : "Viewing history"}</small>
             </div>
 
+            <div className="stream-metrics" aria-label="Live chart context">
+              <article className={outsideBand ? "alert" : "ok"}>
+                <span>Guardrail</span>
+                <strong>{outsideBand ? "Outside 3-sigma" : "In band"}</strong>
+              </article>
+              <article>
+                <span>Current</span>
+                <strong>{currentPoint ? formatNum(currentPoint.value) : "-"}</strong>
+              </article>
+              <article>
+                <span>Progress</span>
+                <strong>{points.length ? `${safePlayhead + 1}/${points.length}` : "-"}</strong>
+              </article>
+              <article>
+                <span>Baseline</span>
+                <strong>{stream ? `${formatNum(stream.summary.mean)} mean · ${formatNum(stream.summary.std)} std` : "-"}</strong>
+              </article>
+              <article>
+                <span>Source</span>
+                <strong>{viewMode === "live" ? "Live edge" : "CSV replay"}</strong>
+              </article>
+            </div>
+
             <div className="chart-shell">
               {chart && visiblePoints.length ? (
                 <svg aria-label={`${selectedSensor} control chart`} className="control-chart" role="img" viewBox="0 0 720 260">
@@ -925,24 +948,6 @@ function LiveControlChart({
               </select>
             </div>
           </div>
-
-          <aside className="stream-side">
-            <article className={outsideBand ? "alert" : "ok"}>
-              <span>Guardrail</span>
-              <strong>{outsideBand ? "Outside 3-sigma band" : "Within replay band"}</strong>
-              <small>{currentPoint ? `${formatNum(currentPoint.value)} current value` : status}</small>
-            </article>
-            <article>
-              <span>Source mode</span>
-              <strong>{viewMode === "live" ? "Live-ready" : "CSV replay"}</strong>
-              <small>{selectedStep === "All steps" ? "All recipe steps included in this replay." : `Filtered to process step ${selectedStep}.`}</small>
-            </article>
-            <article>
-              <span>Replay range</span>
-              <strong>{points.length ? `${safePlayhead + 1} / ${points.length}` : "-"}</strong>
-              <small>{stream ? `${formatNum(stream.summary.mean)} mean, ${formatNum(stream.summary.std)} std` : "Waiting for sensor metadata"}</small>
-            </article>
-          </aside>
         </div>
       </section>
     </Panel>
@@ -1031,26 +1036,25 @@ function RealtimeAlertDashboard({
       )}
 
       <div className="alert-grid">
-        <Panel title="Hotspot Awareness" subtitle="Historical PM1 anomaly concentration">
-          <div className="hotspot-panel">
-            <div>
-              <strong>Recipe steps</strong>
-              <div className="hotspot-chips">
-                {HOTSPOT_STEPS.map((item) => <span className={bannerAlert?.processStep === item ? "active" : ""} key={item}>Step {item}</span>)}
+        <Panel title="Anomaly Watchlist" subtitle={`${alerts.length} local alerts; click a row to focus the chart`}>
+          <div className="watchlist-layout">
+            <aside className="hotspot-panel">
+              <div>
+                <strong>Hotspot steps</strong>
+                <div className="hotspot-chips">
+                  {HOTSPOT_STEPS.map((item) => <span className={bannerAlert?.processStep === item ? "active" : ""} key={item}>Step {item}</span>)}
+                </div>
               </div>
-            </div>
-            <div>
-              <strong>Affected sensors</strong>
-              <div className="hotspot-chips sensors">
-                {HOTSPOT_SENSORS.map((item) => <span className={bannerAlert?.sensor === item ? "active" : ""} key={item}>{item}</span>)}
+              <div>
+                <strong>Common sensors</strong>
+                <div className="hotspot-chips sensors">
+                  {HOTSPOT_SENSORS.map((item) => <span className={bannerAlert?.sensor === item ? "active" : ""} key={item}>{item}</span>)}
+                </div>
               </div>
-            </div>
-            <p>This is anomaly evidence, not confirmed fault classification.</p>
+              <p>This is anomaly evidence, not confirmed fault classification.</p>
+            </aside>
+            <AlertHistoryTable alerts={alerts} selectedAlertId={activeAlert?.id} onSelect={selectAlert} />
           </div>
-        </Panel>
-
-        <Panel title="Recent Alert History" subtitle={`${alerts.length} local alerts; click any row for detail`}>
-          <AlertHistoryTable alerts={alerts} selectedAlertId={activeAlert?.id} onSelect={selectAlert} />
         </Panel>
       </div>
 
