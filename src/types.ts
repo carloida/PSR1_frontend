@@ -52,6 +52,9 @@ export type FaultSummaryRow = {
 
 export type ModelRow = {
   model?: string;
+  method?: string;
+  type?: string;
+  description?: string;
   accuracy?: number;
   precision?: number;
   recall?: number;

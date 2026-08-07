@@ -362,15 +362,45 @@ function WindowsPage({
 }
 
 function ModelsPage({ data }: { data: DashboardData }) {
-  const rf = data.model_comparison.find((row) => row.model?.toLowerCase().includes("random")) ?? {};
+  const modelRows = data.model_comparison.filter((row) => modelDisplayName(row) || hasModelMetric(row));
+  const defaultModelName = modelDisplayName(modelRows.find((row) => modelDisplayName(row).toLowerCase().includes("random")) ?? modelRows[0] ?? {});
+  const [selectedModelName, setSelectedModelName] = useState(defaultModelName);
+
+  useEffect(() => {
+    if (!modelRows.length) return;
+    const names = modelRows.map(modelDisplayName);
+    if (!selectedModelName || !names.includes(selectedModelName)) {
+      setSelectedModelName(defaultModelName || names[0]);
+    }
+  }, [defaultModelName, modelRows, selectedModelName]);
+
+  const selectedModel = modelRows.find((row) => modelDisplayName(row) === selectedModelName) ?? modelRows[0] ?? {};
+  const selectedDescription = selectedModel.description ?? selectedModel.type ?? "Clean anomaly target_anomaly evaluation";
+
   return (
     <div className="stack">
+      <Panel title="Model Scorecard" subtitle="Choose a trained model to inspect its evaluation metrics">
+        <div className="model-picker">
+          <label>
+            <span>Selected model</span>
+            <select value={modelDisplayName(selectedModel)} onChange={(event) => setSelectedModelName(event.target.value)}>
+              {modelRows.map((row) => (
+                <option key={modelDisplayName(row)} value={modelDisplayName(row)}>
+                  {modelDisplayName(row)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p>{selectedDescription}</p>
+        </div>
+      </Panel>
+
       <div className="metric-strip">
-        <Metric label="Accuracy" value={formatMetric(rf.accuracy)} />
-        <Metric label="Precision" value={formatMetric(rf.precision)} />
-        <Metric label="Recall" value={formatMetric(rf.recall)} />
-        <Metric label="F1" value={formatMetric(rf.f1)} />
-        <Metric label="ROC AUC" value={formatMetric(rf.roc_auc)} />
+        <Metric label="Accuracy" value={formatMetric(selectedModel.accuracy)} />
+        <Metric label="Precision" value={formatMetric(selectedModel.precision)} />
+        <Metric label="Recall" value={formatMetric(selectedModel.recall)} />
+        <Metric label="F1" value={formatMetric(selectedModel.f1)} />
+        <Metric label="ROC AUC" value={formatMetric(selectedModel.roc_auc)} />
       </div>
 
       <Panel title="Leakage-Safe Training Contract" subtitle="How the updated PSR1 backend should be interpreted">
@@ -391,8 +421,8 @@ function ModelsPage({ data }: { data: DashboardData }) {
       </Panel>
 
       <div className="two-col">
-        <Panel title="Model Comparison" subtitle="Clean anomaly target_anomaly evaluation">
-          <ModelTable rows={data.model_comparison} />
+        <Panel title="Model Comparison" subtitle="Click a row to update the scorecard">
+          <ModelTable rows={modelRows} selected={selectedModel} onSelect={(row) => setSelectedModelName(modelDisplayName(row))} />
         </Panel>
         <Panel title="Feature Importance" subtitle="Random Forest baseline">
           <Bars items={data.feature_importance.map((row) => ({ label: row.feature, value: row.importance }))} />
@@ -1081,7 +1111,7 @@ function SimpleWindowTable({ onSelect, rows, selected }: { onSelect: (row: Windo
   );
 }
 
-function ModelTable({ rows }: { rows: ModelRow[] }) {
+function ModelTable({ onSelect, rows, selected }: { onSelect?: (row: ModelRow) => void; rows: ModelRow[]; selected?: ModelRow }) {
   return (
     <div className="table-wrap">
       <table>
@@ -1097,8 +1127,8 @@ function ModelTable({ rows }: { rows: ModelRow[] }) {
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.model}>
-              <td>{row.model}</td>
+            <tr className={selected === row ? "selected" : ""} key={modelDisplayName(row)} onClick={() => onSelect?.(row)}>
+              <td>{modelDisplayName(row)}</td>
               <td>{formatMetric(row.accuracy)}</td>
               <td>{formatMetric(row.precision)}</td>
               <td>{formatMetric(row.recall)}</td>
@@ -1158,6 +1188,14 @@ function weakFault(row: WindowRecord) {
 
 function triggeredRules(row: WindowRecord) {
   return rules.filter((rule) => Number(row[rule.key]) === 1).map((rule) => rule.label);
+}
+
+function modelDisplayName(row: ModelRow) {
+  return row.model ?? row.method ?? "";
+}
+
+function hasModelMetric(row: ModelRow) {
+  return [row.accuracy, row.precision, row.recall, row.f1, row.roc_auc].some((value) => value !== undefined && value !== null);
 }
 
 function plotUrl(plot: PlotFile) {
