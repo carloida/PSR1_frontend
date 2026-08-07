@@ -129,7 +129,12 @@ export async function askInferenceAgent(payload: AgentChatPayload): Promise<Agen
       continue;
     }
     if (response.ok) {
-      return (await response.json()) as AgentChatResponse;
+      try {
+        return (await response.json()) as AgentChatResponse;
+      } catch {
+        lastError = `${endpoint} did not return JSON.`;
+        continue;
+      }
     }
     lastError = await readApiError(response);
   }
