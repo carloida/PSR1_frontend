@@ -363,7 +363,7 @@ function WindowsPage({
 
 function ModelsPage({ data }: { data: DashboardData }) {
   const modelRows = data.model_comparison.filter((row) => modelDisplayName(row) || hasModelMetric(row));
-  const defaultModelName = modelDisplayName(modelRows.find((row) => modelDisplayName(row).toLowerCase().includes("random")) ?? modelRows[0] ?? {});
+  const defaultModelName = modelDisplayName(modelRows[0] ?? {});
   const [selectedModelName, setSelectedModelName] = useState(defaultModelName);
 
   useEffect(() => {
@@ -386,7 +386,7 @@ function ModelsPage({ data }: { data: DashboardData }) {
             <select value={modelDisplayName(selectedModel)} onChange={(event) => setSelectedModelName(event.target.value)}>
               {modelRows.map((row) => (
                 <option key={modelDisplayName(row)} value={modelDisplayName(row)}>
-                  {modelDisplayName(row)}
+                  {formatModelName(modelDisplayName(row))}
                 </option>
               ))}
             </select>
@@ -1128,7 +1128,7 @@ function ModelTable({ onSelect, rows, selected }: { onSelect?: (row: ModelRow) =
         <tbody>
           {rows.map((row) => (
             <tr className={selected === row ? "selected" : ""} key={modelDisplayName(row)} onClick={() => onSelect?.(row)}>
-              <td>{modelDisplayName(row)}</td>
+              <td>{formatModelName(modelDisplayName(row))}</td>
               <td>{formatMetric(row.accuracy)}</td>
               <td>{formatMetric(row.precision)}</td>
               <td>{formatMetric(row.recall)}</td>
@@ -1192,6 +1192,17 @@ function triggeredRules(row: WindowRecord) {
 
 function modelDisplayName(row: ModelRow) {
   return row.model ?? row.method ?? "";
+}
+
+function formatModelName(value: string) {
+  return value
+    ? value
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase())
+        .replace(/\bXgboost\b/i, "XGBoost")
+        .replace(/\bLightgbm\b/i, "LightGBM")
+        .replace(/\bLof\b/i, "LOF")
+    : "Unnamed model";
 }
 
 function hasModelMetric(row: ModelRow) {
