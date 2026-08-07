@@ -40,7 +40,12 @@ export async function fetchDashboardData(): Promise<{ data: DashboardData; sourc
 }
 
 export async function runPipelineStep(step: PipelineStep): Promise<PipelineRunResult> {
-  const response = await fetch(`${apiBaseUrl}/api/pipeline/run/${step}`, { method: "POST" });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}/api/pipeline/run/${step}`, { method: "POST" });
+  } catch {
+    throw new Error(`Cannot reach the local PSR1 API at ${apiBaseUrl}. Start the backend on port 8002, or open the dashboard with the Desktop shortcut so frontend and API start together.`);
+  }
   if (!response.ok) {
     throw new Error(await readApiError(response));
   }
@@ -50,10 +55,15 @@ export async function runPipelineStep(step: PipelineStep): Promise<PipelineRunRe
 export async function uploadSourceFile(file: File): Promise<UploadResult> {
   const body = new FormData();
   body.append("file", file);
-  const response = await fetch(`${apiBaseUrl}/api/ingest/upload`, {
-    body,
-    method: "POST"
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}/api/ingest/upload`, {
+      body,
+      method: "POST"
+    });
+  } catch {
+    throw new Error(`Cannot reach the local PSR1 API at ${apiBaseUrl}. Start the backend on port 8002, or open the dashboard with the Desktop shortcut so frontend and API start together.`);
+  }
   if (!response.ok) {
     throw new Error(await readApiError(response));
   }
