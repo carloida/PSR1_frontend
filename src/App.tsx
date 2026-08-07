@@ -907,7 +907,7 @@ function LiveControlChart({
 function RealtimeAlertDashboard({ currentAlert, data }: { currentAlert?: RealtimeAlert; data: DashboardData }) {
   const seedAlerts = useMemo(() => mockRealtimeAlerts(data.windows), [data.windows]);
   const [alerts, setAlerts] = useState<RealtimeAlert[]>(seedAlerts);
-  const [selectedAlertId, setSelectedAlertId] = useState(seedAlerts[0]?.id ?? "");
+  const [selectedAlertId, setSelectedAlertId] = useState("");
   const [contextKind, setContextKind] = useState<ContextKind>("operator_notes");
   const [contextDraft, setContextDraft] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
@@ -916,7 +916,7 @@ function RealtimeAlertDashboard({ currentAlert, data }: { currentAlert?: Realtim
     setAlerts((current) => {
       const liveAlerts = current.filter((alert) => !alert.id.includes("-window-"));
       const next = mergeAlerts(liveAlerts, seedAlerts);
-      setSelectedAlertId((selected) => (next.some((alert) => alert.id === selected) ? selected : next[0]?.id ?? ""));
+      setSelectedAlertId((selected) => (next.some((alert) => alert.id === selected) ? selected : ""));
       return next;
     });
   }, [seedAlerts]);
@@ -924,10 +924,9 @@ function RealtimeAlertDashboard({ currentAlert, data }: { currentAlert?: Realtim
   useEffect(() => {
     if (!currentAlert) return;
     setAlerts((current) => mergeAlerts([currentAlert], current));
-    setSelectedAlertId((current) => current || currentAlert.id);
   }, [currentAlert]);
 
-  const activeAlert = alerts.find((alert) => alert.id === selectedAlertId) ?? alerts[0];
+  const activeAlert = alerts.find((alert) => alert.id === selectedAlertId);
   const bannerAlert = currentAlert ?? alerts.find((alert) => alert.status === "new") ?? alerts[0];
 
   function updateAlert(id: string, updater: (alert: RealtimeAlert) => RealtimeAlert) {
