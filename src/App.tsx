@@ -201,9 +201,12 @@ function App() {
           </div>
         </header>
 
-        {!liveChartHidden ? <LiveControlChart compact onHide={() => updateLiveChartHidden(true)} onSignalAlert={setLiveSignalAlert} /> : null}
-
-        <RealtimeAlertDashboard currentAlert={liveSignalAlert} data={data} />
+        {!liveChartHidden ? (
+          <>
+            <LiveControlChart compact onHide={() => updateLiveChartHidden(true)} onSignalAlert={setLiveSignalAlert} />
+            <RealtimeAlertDashboard currentAlert={liveSignalAlert} data={data} />
+          </>
+        ) : null}
 
         <header className="page-header">
           <div>
