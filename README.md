@@ -35,6 +35,8 @@ http://127.0.0.1:8002
 
 Set `VITE_API_BASE_URL` if the backend is running somewhere else.
 
+On Windows, `Start-PSR1-Frontend.ps1` starts the frontend server on port `5175` and opens the browser. A Desktop shortcut can point to this script so the UI can be opened without starting Codex.
+
 ## Build
 
 ```bash
