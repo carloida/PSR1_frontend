@@ -160,6 +160,8 @@ function App() {
           </div>
         </header>
 
+        <LiveControlChart compact />
+
         <header className="page-header">
           <div>
             <p>Semiconductor FDC prototype</p>
@@ -568,8 +570,6 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
         <pre className="run-output">{runLog}</pre>
       </Panel>
 
-      <LiveControlChart />
-
       <Panel title="Data Source" subtitle="Choose how PM1 data enters the realtime review loop">
         <div className="source-switch" role="tablist" aria-label="Data source mode">
           <button className={sourceMode === "upload" ? "active" : ""} type="button" onClick={() => setSourceMode("upload")}>
@@ -644,7 +644,7 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
   );
 }
 
-function LiveControlChart() {
+function LiveControlChart({ compact = false }: { compact?: boolean }) {
   const [stream, setStream] = useState<SensorStream | null>(null);
   const [selectedSensor, setSelectedSensor] = useState("");
   const [playhead, setPlayhead] = useState(0);
@@ -699,6 +699,12 @@ function LiveControlChart() {
     setIsPlaying(true);
   }
 
+  function restartReplay() {
+    setViewMode("replay");
+    setPlayhead(0);
+    setIsPlaying(false);
+  }
+
   const points = stream?.points ?? [];
   const lastIndex = Math.max(points.length - 1, 0);
   const safePlayhead = Math.min(playhead, lastIndex);
@@ -714,6 +720,7 @@ function LiveControlChart() {
   );
 
   return (
+    <div className={compact ? "persistent-live-chart" : ""}>
     <Panel title="Live Sensor Control Chart" subtitle="Replay uploaded CSV data now; prepared for future historian or machine streaming">
       <section className="live-control-shell">
         <div className="stream-toolbar">
@@ -746,7 +753,7 @@ function LiveControlChart() {
                 <span className={viewMode === "live" && atLiveEdge ? "live-pill on" : "live-pill"}>
                   {viewMode === "live" && atLiveEdge ? "LIVE" : "REPLAY"}
                 </span>
-                <strong>{currentPoint ? shortDate(currentPoint.timestamp) : status}</strong>
+                <strong>{currentPoint ? preciseTimestamp(currentPoint.timestamp) : status}</strong>
               </div>
               <small>{atLiveEdge ? "At latest available sample" : "Viewing history"}</small>
             </div>
@@ -769,6 +776,9 @@ function LiveControlChart() {
             <div className="stream-controls">
               <button type="button" disabled={!points.length} onClick={() => setIsPlaying((value) => !value)}>
                 {isPlaying ? "Pause" : "Play"}
+              </button>
+              <button className="stream-restart" type="button" disabled={!points.length} onClick={restartReplay}>
+                Restart
               </button>
               <input
                 aria-label="Replay timeline"
@@ -811,6 +821,7 @@ function LiveControlChart() {
         </div>
       </section>
     </Panel>
+    </div>
   );
 }
 
@@ -1495,6 +1506,22 @@ function shortDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function preciseTimestamp(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const milliseconds = String(date.getMilliseconds()).padStart(3, "0");
+  return new Intl.DateTimeFormat([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "short",
+    day: "2-digit",
+    second: "2-digit"
+  })
+    .formatToParts(date)
+    .map((part) => (part.type === "second" ? `${part.value}.${milliseconds}` : part.value))
+    .join("");
 }
 
 export default App;
