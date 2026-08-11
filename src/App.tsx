@@ -2361,8 +2361,8 @@ function liveModelOptions(rows: ModelRow[]): LiveModelOption[] {
 
 function bestModelMetric(row: ModelRow): { name: LiveModelOption["metricName"]; score: number } | undefined {
   const candidates: Array<{ name: LiveModelOption["metricName"]; score?: number }> = [
-    { name: "roc_auc", score: row.roc_auc },
     { name: "f1", score: row.f1 },
+    { name: "roc_auc", score: row.roc_auc },
     { name: "accuracy", score: row.accuracy },
     { name: "precision", score: row.precision },
     { name: "recall", score: row.recall }
@@ -2373,8 +2373,8 @@ function bestModelMetric(row: ModelRow): { name: LiveModelOption["metricName"]; 
 
 function modelMetricRank(metric: LiveModelOption["metricName"]) {
   const ranks: Record<LiveModelOption["metricName"], number> = {
-    roc_auc: 0,
-    f1: 1,
+    f1: 0,
+    roc_auc: 1,
     accuracy: 2,
     precision: 3,
     recall: 4,
