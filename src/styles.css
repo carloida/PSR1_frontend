@@ -1591,6 +1591,24 @@ tbody tr.selected {
   background: #fff8f5;
 }
 
+.stream-metrics article.model-support-card.strong {
+  border-top-color: var(--success);
+}
+
+.stream-metrics article.model-support-card.moderate {
+  border-top-color: var(--amber);
+  background: #fffaf0;
+}
+
+.stream-metrics article.model-support-card.limited {
+  border-top-color: var(--red);
+  background: #fff5f3;
+}
+
+.stream-metrics article.model-support-card.unknown {
+  border-top-color: #94a3b8;
+}
+
 .stream-metrics span {
   color: var(--muted);
   font-size: 0.64rem;
@@ -1606,6 +1624,26 @@ tbody tr.selected {
   font-size: 0.86rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.model-support-line {
+  font-weight: 900;
+}
+
+.model-support-line.strong {
+  color: var(--success);
+}
+
+.model-support-line.moderate {
+  color: #9a4f00;
+}
+
+.model-support-line.limited {
+  color: var(--red);
+}
+
+.model-support-line.unknown {
+  color: var(--muted);
 }
 
 .live-pill {
@@ -1776,7 +1814,7 @@ tbody tr.selected {
 
 .alert-banner {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   gap: 0.65rem;
   align-items: center;
   width: 100%;
@@ -1810,7 +1848,8 @@ tbody tr.selected {
 }
 
 .alert-banner span,
-.badge.severity {
+.badge.severity,
+.badge.model-support {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1820,6 +1859,44 @@ tbody tr.selected {
   font-size: 0.72rem;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+.badge.model-support {
+  min-height: 1.45rem;
+  border: 1px solid var(--line);
+  background: #edf4fb;
+  color: #33475b;
+  font-size: 0.66rem;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.badge.model-support.strong,
+.alert-banner em.model-support.strong {
+  border-color: rgba(4, 120, 87, 0.24);
+  background: #e9f8f2;
+  color: #047857;
+}
+
+.badge.model-support.moderate,
+.alert-banner em.model-support.moderate {
+  border-color: rgba(247, 127, 0, 0.28);
+  background: #fff4dc;
+  color: #8a3d00;
+}
+
+.badge.model-support.limited,
+.alert-banner em.model-support.limited {
+  border-color: rgba(214, 40, 40, 0.22);
+  background: #fff1f0;
+  color: var(--red);
+}
+
+.badge.model-support.unknown,
+.alert-banner em.model-support.unknown {
+  border-color: var(--line);
+  background: #f8fafc;
+  color: var(--muted);
 }
 
 .alert-banner.watch span,

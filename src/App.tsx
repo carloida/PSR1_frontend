@@ -29,6 +29,7 @@ const HOTSPOT_SENSORS = ["TC301温度", "TC107温度", "TC100温度", "TC609加�
 
 type AlertLevel = "watch" | "warning" | "alarm";
 type AlertReviewStatus = "new" | "acknowledged" | "needs_engineer_review" | "likely_false_alarm";
+type ModelSupportLevel = "strong" | "moderate" | "limited" | "unknown";
 
 type RealtimeAlert = {
   id: string;
@@ -37,6 +38,9 @@ type RealtimeAlert = {
   processStep: string;
   mlModelName?: string;
   mlModelMetric?: string;
+  mlModelQuality?: ModelSupportLevel;
+  mlModelQualityLabel?: string;
+  mlModelScore?: number;
   level: AlertLevel;
   anomalyScore: number;
   mlProbability: number;
@@ -69,6 +73,8 @@ type LiveModelOption = {
   metricLabel: string;
   metricName: "roc_auc" | "f1" | "accuracy" | "precision" | "recall" | "available";
   score: number;
+  supportLabel: string;
+  supportLevel: ModelSupportLevel;
   row: ModelRow;
 };
 
@@ -79,6 +85,8 @@ type LiveChartSnapshot = {
   value: number;
   mlModelName?: string;
   mlModelMetric?: string;
+  mlModelQuality?: ModelSupportLevel;
+  mlModelQualityLabel?: string;
   mlProbability?: number;
   guardrail: "in_band" | "outside_3sigma";
   sourceMode: "csv_replay" | "live_edge";
@@ -893,6 +901,8 @@ function LiveControlChart({
       mean: stream.summary.mean,
       mlModelMetric: selectedModel?.metricLabel,
       mlModelName: selectedModel?.label,
+      mlModelQuality: selectedModel?.supportLevel,
+      mlModelQualityLabel: selectedModel?.supportLabel,
       mlProbability: currentLiveAlert?.mlProbability,
       processStep: selectedStep,
       progress: points.length ? `${safePlayhead + 1}/${points.length}` : "-",
@@ -931,7 +941,11 @@ function LiveControlChart({
                 </option>
               ))}
             </select>
-            {selectedModel && bestModel?.id === selectedModel.id ? <small>Best evaluated model</small> : null}
+            {selectedModel ? (
+              <small className={`model-support-line ${selectedModel.supportLevel}`}>
+                {bestModel?.id === selectedModel.id ? "Best by F1" : modelSupportShort(selectedModel.supportLevel)}
+              </small>
+            ) : null}
           </label>
           <div className="stream-mode-tabs" role="tablist" aria-label="Stream mode">
             <button className={viewMode === "replay" ? "active" : ""} type="button" onClick={() => {
@@ -983,9 +997,9 @@ function LiveControlChart({
                 <span>Model</span>
                 <strong title={selectedModel ? `${selectedModel.label} · ${selectedModel.metricLabel}` : undefined}>{selectedModel?.label ?? "No model"}</strong>
               </article>
-              <article>
-                <span>Baseline</span>
-                <strong>{stream ? `${formatNum(stream.summary.mean)} mean · ${formatNum(stream.summary.std)} std` : "-"}</strong>
+              <article className={`model-support-card ${selectedModel?.supportLevel ?? "unknown"}`}>
+                <span>ML support</span>
+                <strong title={selectedModel?.supportLabel}>{selectedModel ? modelSupportShort(selectedModel.supportLevel) : "Unknown"}</strong>
               </article>
               <article>
                 <span>Progress</span>
@@ -1110,8 +1124,9 @@ function RealtimeAlertDashboard({
           <span>{formatAlertLevel(bannerAlert.level)}</span>
           <strong>{bannerAlert.sensor}: possible issue</strong>
           <small>
-            Step {bannerAlert.processStep} · score {formatMetric(bannerAlert.anomalyScore)} · ML {formatMetric(bannerAlert.mlProbability)} · {preciseTimestamp(bannerAlert.timestamp)}
+            Step {bannerAlert.processStep} | score {formatMetric(bannerAlert.anomalyScore)} | ML {formatMetric(bannerAlert.mlProbability)} | {bannerAlert.mlModelQualityLabel ?? modelSupportLabel(undefined)} | {preciseTimestamp(bannerAlert.timestamp)}
           </small>
+          <em className={`model-support ${bannerAlert.mlModelQuality ?? "unknown"}`}>{modelSupportShort(bannerAlert.mlModelQuality)}</em>
           {bannerAlert.hotspot ? <em>Historical hotspot</em> : null}
         </button>
       ) : (
@@ -1161,6 +1176,8 @@ function RealtimeAlertDashboard({
               <div className="alert-score-grid">
                 <Metric label="Anomaly score" value={formatMetric(activeAlert.anomalyScore)} tone={activeAlert.level === "alarm" ? "warn" : undefined} />
                 <Metric label="ML probability" value={formatMetric(activeAlert.mlProbability)} />
+                <Metric label="ML support" value={modelSupportShort(activeAlert.mlModelQuality)} tone={activeAlert.mlModelQuality === "limited" ? "warn" : undefined} />
+                <Metric label="Model metric" value={activeAlert.mlModelMetric ?? "-"} />
                 <Metric label="Range guardrail" value={activeAlert.rangeAnomaly ? "Triggered" : "Clear"} tone={activeAlert.rangeAnomaly ? "warn" : undefined} />
                 <Metric label="Review status" value={formatReviewStatus(activeAlert.status)} />
               </div>
@@ -1244,6 +1261,7 @@ function AlertHistoryTable({
             <th>Level</th>
             <th>Score</th>
             <th>ML prob.</th>
+            <th>ML support</th>
             <th>Top pattern</th>
             <th>Status</th>
             <th>Notes</th>
@@ -1258,6 +1276,7 @@ function AlertHistoryTable({
               <td><span className={`badge severity ${alert.level}`}>{formatAlertLevel(alert.level)}</span></td>
               <td>{formatMetric(alert.anomalyScore)}</td>
               <td>{formatMetric(alert.mlProbability)}</td>
+              <td><span className={`badge model-support ${alert.mlModelQuality ?? "unknown"}`}>{modelSupportShort(alert.mlModelQuality)}</span></td>
               <td>{alert.detectedPatterns[0] ?? "-"}</td>
               <td>{formatReviewStatus(alert.status)}</td>
               <td>{alert.notes.length}</td>
@@ -1934,7 +1953,7 @@ function buildAgentCaseFile({
   const patterns = inferDeterministicPatterns({ liveChartSnapshot, liveSignalAlert, selectedWindow });
   const evidence = [
     liveChartSnapshot ? `Live chart: ${liveChartSnapshot.sensor}, step ${liveChartSnapshot.processStep}, value ${formatNum(liveChartSnapshot.value)}, guardrail ${liveChartSnapshot.guardrail}, ML model ${liveChartSnapshot.mlModelName ?? "not selected"}${liveChartSnapshot.mlModelMetric ? ` (${liveChartSnapshot.mlModelMetric})` : ""}.` : "",
-    liveSignalAlert ? `Alert: ${formatAlertLevel(liveSignalAlert.level)} with score ${formatMetric(liveSignalAlert.anomalyScore)} and ML probability ${formatMetric(liveSignalAlert.mlProbability)}.` : "",
+    liveSignalAlert ? `Alert: ${formatAlertLevel(liveSignalAlert.level)} with score ${formatMetric(liveSignalAlert.anomalyScore)} and ML probability ${formatMetric(liveSignalAlert.mlProbability)}. ML support: ${liveSignalAlert.mlModelQualityLabel ?? modelSupportLabel(undefined)}.` : "",
     `Selected SPC window: ${selectedWindow.sensor_name}, step ${selectedWindow.process_step}, z-score ${formatMetric(selectedWindow.z_score)}, target_anomaly=${selectedWindow.target_anomaly}.`,
     selectedRules.length ? `Triggered SPC rules: ${selectedRules.join(", ")}.` : "No explicit SPC rule flag is selected in the current window.",
     selectedPlot ? `Selected evidence plot: ${selectedPlot.group} / ${selectedPlot.title}.` : ""
@@ -1956,6 +1975,7 @@ function buildAgentCaseFile({
       caveat: "This is anomaly evidence, not confirmed fault classification.",
       current_alert: liveSignalAlert,
       live_chart: liveChartSnapshot,
+      live_model_support: liveChartSnapshot?.mlModelQualityLabel,
       model_scores: modelScores,
       overview: data.overview,
       plot_count: plots.length,
@@ -1978,6 +1998,7 @@ function deterministicAgentAnswer(caseFile: ReturnType<typeof buildAgentCaseFile
   return [
     `Deterministic review first: ${subject} at step ${step} is being treated as anomaly evidence, not confirmed fault classification.`,
     `Patterns checked: ${findings.patterns.join(", ")}.`,
+    `Selected model support: ${context.live_model_support ?? alert?.mlModelQualityLabel ?? modelSupportLabel(undefined)}.`,
     `Supporting evidence: ${findings.evidence.slice(0, 4).join(" ")}`,
     `Next actions: ${findings.actions.slice(0, 3).join(" ")}`
   ].join("\n");
@@ -2034,7 +2055,8 @@ function alertFromSignal(stream: SensorStream, point: SensorPoint, model?: LiveM
   const rangeAnomaly = Number(point.value) > stream.summary.upper_3sigma || Number(point.value) < stream.summary.lower_3sigma;
   const hotspot = isHotspot(stream.sensor, stream.step);
   const anomalyScore = clamp01((z / 3.1) + (rangeAnomaly ? 0.22 : 0) + (hotspot && z > 0.8 ? 0.08 : 0));
-  const modelCalibration = model ? Math.max(0.72, Math.min(1.08, 0.68 + model.score * 0.4)) : 0.9;
+  const modelSupport = model?.supportLevel ?? "unknown";
+  const modelCalibration = modelCalibrationFactor(model);
   const mlProbability = clamp01((anomalyScore * modelCalibration) + (hotspot ? 0.05 : 0));
   const level = alertLevel(anomalyScore, mlProbability, rangeAnomaly);
   if (!level) return undefined;
@@ -2043,6 +2065,9 @@ function alertFromSignal(stream: SensorStream, point: SensorPoint, model?: LiveM
     level,
     mlModelMetric: model?.metricLabel,
     mlModelName: model?.label,
+    mlModelQuality: modelSupport,
+    mlModelQualityLabel: model?.supportLabel ?? modelSupportLabel(model),
+    mlModelScore: model?.score,
     mlProbability,
     rangeAnomaly,
     sensor: stream.sensor,
@@ -2088,6 +2113,9 @@ function buildAlert({
   level,
   mlModelMetric,
   mlModelName,
+  mlModelQuality,
+  mlModelQualityLabel,
+  mlModelScore,
   mlProbability,
   processStep,
   rangeAnomaly,
@@ -2103,6 +2131,9 @@ function buildAlert({
   level: AlertLevel;
   mlModelMetric?: string;
   mlModelName?: string;
+  mlModelQuality?: ModelSupportLevel;
+  mlModelQualityLabel?: string;
+  mlModelScore?: number;
   mlProbability: number;
   processStep: string;
   rangeAnomaly: boolean;
@@ -2119,6 +2150,7 @@ function buildAlert({
     zScore >= 1.4 ? "mean_shift" : "",
     Number(windowStd ?? 0) > 0 ? "window_std" : "",
     mlModelName ? `ml_model:${mlModelName}` : "",
+    mlModelQuality ? `ml_support:${mlModelQuality}` : "",
     rangeAnomaly ? "range_guardrail" : "",
     hotspot ? "historical_hotspot" : ""
   ].filter(Boolean);
@@ -2130,6 +2162,7 @@ function buildAlert({
     featureEvidence: [
       { feature: "anomaly_score", evidence: `Anomaly score is ${formatMetric(anomalyScore)}; combined evidence reached ${formatAlertLevel(level).toLowerCase()} level.` },
       { feature: "ml_probability", evidence: `ML probability estimate is ${formatMetric(mlProbability)}${mlModelName ? ` using ${mlModelName} (${mlModelMetric}).` : "."}` },
+      { feature: "model_support", evidence: `${mlModelQualityLabel ?? modelSupportLabel(undefined)}; lower-scoring selected models should be treated as weaker ML evidence.` },
       { feature: "z_score", evidence: `Absolute z-style deviation is ${formatMetric(zScore)}.` },
       { feature: "current_value", evidence: value === undefined ? "Current signal value was not supplied." : `Current value is ${formatNum(value)} versus local mean ${formatNum(windowMean)}.` },
       ...(hotspot ? [{ feature: "historical_hotspot", evidence: `${sensor} or step ${processStep} appears in historical anomaly hotspots.` }] : [])
@@ -2137,6 +2170,7 @@ function buildAlert({
     hotspot,
     level,
     missingEvidence: [
+      ...(mlModelQuality === "limited" ? ["Higher-F1 model confirmation or retraining validation"] : []),
       "Tool/chamber event log around this timestamp",
       "Maintenance or calibration notes",
       "Lot/product and recipe context",
@@ -2144,6 +2178,9 @@ function buildAlert({
     ],
     mlModelMetric,
     mlModelName,
+    mlModelQuality,
+    mlModelQualityLabel,
+    mlModelScore,
     mlProbability,
     nextQuestions: [
       "Did this step recently change recipe timing or setpoint?",
@@ -2344,19 +2381,60 @@ function liveModelOptions(rows: ModelRow[]): LiveModelOption[] {
     .map((row, index) => {
       const metric = bestModelMetric(row);
       const label = formatModelName(modelDisplayName(row) || row.description || `Model ${index + 1}`);
-      return metric
-        ? {
-            id: `${modelDisplayName(row) || row.description || "model"}-${index}`,
-            label,
-            metricLabel: `${formatMetricName(metric.name)} ${formatMetric(metric.score)}`,
-            metricName: metric.name,
-            row,
-            score: metric.score
-          }
-        : undefined;
+      if (!metric) return undefined;
+      const supportLevel = modelSupportLevel(metric.score);
+      const metricLabel = `${formatMetricName(metric.name)} ${formatMetric(metric.score)}`;
+      return {
+        id: `${modelDisplayName(row) || row.description || "model"}-${index}`,
+        label,
+        metricLabel,
+        metricName: metric.name,
+        row,
+        score: metric.score,
+        supportLabel: modelSupportLabel({ metricLabel, score: metric.score, supportLevel }),
+        supportLevel
+      };
     })
     .filter((item): item is LiveModelOption => Boolean(item))
     .sort((a, b) => modelMetricRank(a.metricName) - modelMetricRank(b.metricName) || b.score - a.score || a.label.localeCompare(b.label));
+}
+
+function modelSupportLevel(score?: number): ModelSupportLevel {
+  if (score === undefined || score === null || !Number.isFinite(Number(score))) return "unknown";
+  const normalized = Number(score);
+  if (normalized >= 0.8) return "strong";
+  if (normalized >= 0.65) return "moderate";
+  return "limited";
+}
+
+function modelSupportShort(level?: ModelSupportLevel) {
+  const labels: Record<ModelSupportLevel, string> = {
+    limited: "Limited support",
+    moderate: "Moderate support",
+    strong: "Strong support",
+    unknown: "Unknown support"
+  };
+  return labels[level ?? "unknown"];
+}
+
+function modelSupportLabel(model?: Pick<LiveModelOption, "metricLabel" | "score" | "supportLevel">) {
+  if (!model) return "Unknown ML support; no evaluated model is selected";
+  return `${modelSupportShort(model.supportLevel)} based on ${model.metricLabel}`;
+}
+
+function modelCalibrationFactor(model?: LiveModelOption) {
+  if (!model) return 0.78;
+  const score = Math.max(0, Math.min(1, Number(model.score) || 0));
+  switch (model.supportLevel) {
+    case "strong":
+      return Math.min(1.08, 0.96 + score * 0.1);
+    case "moderate":
+      return 0.78 + score * 0.12;
+    case "limited":
+      return 0.58 + score * 0.16;
+    default:
+      return 0.78;
+  }
 }
 
 function bestModelMetric(row: ModelRow): { name: LiveModelOption["metricName"]; score: number } | undefined {
