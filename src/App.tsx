@@ -35,6 +35,8 @@ type RealtimeAlert = {
   timestamp: string;
   sensor: string;
   processStep: string;
+  mlModelName?: string;
+  mlModelMetric?: string;
   level: AlertLevel;
   anomalyScore: number;
   mlProbability: number;
@@ -61,11 +63,23 @@ type ChartFocusRequest = {
   timestamp: string;
 };
 
+type LiveModelOption = {
+  id: string;
+  label: string;
+  metricLabel: string;
+  metricName: "roc_auc" | "f1" | "accuracy" | "precision" | "recall" | "available";
+  score: number;
+  row: ModelRow;
+};
+
 type LiveChartSnapshot = {
   sensor: string;
   processStep: string;
   timestamp: string;
   value: number;
+  mlModelName?: string;
+  mlModelMetric?: string;
+  mlProbability?: number;
   guardrail: "in_band" | "outside_3sigma";
   sourceMode: "csv_replay" | "live_edge";
   progress: string;
@@ -233,7 +247,14 @@ function App() {
 
         {!liveChartHidden ? (
           <>
-            <LiveControlChart compact focusRequest={chartFocusRequest} onChartSnapshot={setLiveChartSnapshot} onHide={() => updateLiveChartHidden(true)} onSignalAlert={setLiveSignalAlert} />
+            <LiveControlChart
+              compact
+              focusRequest={chartFocusRequest}
+              modelRows={data.model_comparison}
+              onChartSnapshot={setLiveChartSnapshot}
+              onHide={() => updateLiveChartHidden(true)}
+              onSignalAlert={setLiveSignalAlert}
+            />
             <RealtimeAlertDashboard currentAlert={liveSignalAlert} data={data} onFocusAlert={focusLiveChart} />
           </>
         ) : null}
@@ -727,12 +748,14 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
 function LiveControlChart({
   compact = false,
   focusRequest,
+  modelRows,
   onChartSnapshot,
   onHide,
   onSignalAlert
 }: {
   compact?: boolean;
   focusRequest?: ChartFocusRequest;
+  modelRows: ModelRow[];
   onChartSnapshot?: (snapshot: LiveChartSnapshot | undefined) => void;
   onHide?: () => void;
   onSignalAlert?: (alert: RealtimeAlert | undefined) => void;
@@ -740,15 +763,27 @@ function LiveControlChart({
   const [stream, setStream] = useState<SensorStream | null>(null);
   const [selectedSensor, setSelectedSensor] = useState("");
   const [selectedStep, setSelectedStep] = useState("All steps");
+  const [selectedModelId, setSelectedModelId] = useState("");
   const [playhead, setPlayhead] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [viewMode, setViewMode] = useState<"replay" | "live">("replay");
   const [status, setStatus] = useState("Loading PM1 sensor stream...");
+  const modelOptions = useMemo(() => liveModelOptions(modelRows), [modelRows]);
+  const bestModel = modelOptions[0];
+  const selectedModel = modelOptions.find((model) => model.id === selectedModelId) ?? bestModel;
 
   useEffect(() => {
     void loadStream();
   }, []);
+
+  useEffect(() => {
+    if (!modelOptions.length) {
+      setSelectedModelId("");
+      return;
+    }
+    setSelectedModelId((current) => (modelOptions.some((model) => model.id === current) ? current : modelOptions[0].id));
+  }, [modelOptions]);
 
   useEffect(() => {
     if (!focusRequest) return;
@@ -842,6 +877,9 @@ function LiveControlChart({
       currentPoint &&
       (currentPoint.value > stream.summary.upper_3sigma || currentPoint.value < stream.summary.lower_3sigma)
   );
+  const currentLiveAlert = useMemo(() => {
+    return stream && currentPoint ? alertFromSignal(stream, currentPoint, selectedModel) : undefined;
+  }, [currentPoint, selectedModel, stream]);
 
   useEffect(() => {
     if (!stream || !currentPoint) {
@@ -849,10 +887,13 @@ function LiveControlChart({
       onChartSnapshot?.(undefined);
       return;
     }
-    onSignalAlert?.(alertFromSignal(stream, currentPoint));
+    onSignalAlert?.(currentLiveAlert);
     onChartSnapshot?.({
       guardrail: outsideBand ? "outside_3sigma" : "in_band",
       mean: stream.summary.mean,
+      mlModelMetric: selectedModel?.metricLabel,
+      mlModelName: selectedModel?.label,
+      mlProbability: currentLiveAlert?.mlProbability,
       processStep: selectedStep,
       progress: points.length ? `${safePlayhead + 1}/${points.length}` : "-",
       sensor: selectedSensor,
@@ -861,7 +902,7 @@ function LiveControlChart({
       timestamp: currentPoint.timestamp,
       value: currentPoint.value
     });
-  }, [currentPoint, onChartSnapshot, onSignalAlert, outsideBand, points.length, safePlayhead, selectedSensor, selectedStep, stream, viewMode]);
+  }, [currentLiveAlert, currentPoint, onChartSnapshot, onSignalAlert, outsideBand, points.length, safePlayhead, selectedModel, selectedSensor, selectedStep, stream, viewMode]);
 
   return (
     <div className={compact ? "persistent-live-chart" : ""}>
@@ -880,6 +921,17 @@ function LiveControlChart({
               <option>All steps</option>
               {stream?.steps.map((stepName) => <option key={stepName}>{stepName}</option>)}
             </select>
+          </label>
+          <label className="stream-model-select" htmlFor="live-model-select">
+            <span>ML model</span>
+            <select id="live-model-select" disabled={!modelOptions.length} value={selectedModel?.id ?? ""} onChange={(event) => setSelectedModelId(event.target.value)}>
+              {modelOptions.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label} · {model.metricLabel}
+                </option>
+              ))}
+            </select>
+            {selectedModel && bestModel?.id === selectedModel.id ? <small>Best evaluated model</small> : null}
           </label>
           <div className="stream-mode-tabs" role="tablist" aria-label="Stream mode">
             <button className={viewMode === "replay" ? "active" : ""} type="button" onClick={() => {
@@ -924,16 +976,20 @@ function LiveControlChart({
                 <strong>{currentPoint ? formatNum(currentPoint.value) : "-"}</strong>
               </article>
               <article>
-                <span>Progress</span>
-                <strong>{points.length ? `${safePlayhead + 1}/${points.length}` : "-"}</strong>
+                <span>ML probability</span>
+                <strong>{currentLiveAlert ? formatMetric(currentLiveAlert.mlProbability) : "Below watch"}</strong>
+              </article>
+              <article>
+                <span>Model</span>
+                <strong title={selectedModel ? `${selectedModel.label} · ${selectedModel.metricLabel}` : undefined}>{selectedModel?.label ?? "No model"}</strong>
               </article>
               <article>
                 <span>Baseline</span>
                 <strong>{stream ? `${formatNum(stream.summary.mean)} mean · ${formatNum(stream.summary.std)} std` : "-"}</strong>
               </article>
               <article>
-                <span>Source</span>
-                <strong>{viewMode === "live" ? "Live edge" : "CSV replay"}</strong>
+                <span>Progress</span>
+                <strong>{points.length ? `${safePlayhead + 1}/${points.length}` : "-"}</strong>
               </article>
             </div>
 
@@ -1877,7 +1933,7 @@ function buildAgentCaseFile({
   const selectedRules = triggeredRules(selectedWindow);
   const patterns = inferDeterministicPatterns({ liveChartSnapshot, liveSignalAlert, selectedWindow });
   const evidence = [
-    liveChartSnapshot ? `Live chart: ${liveChartSnapshot.sensor}, step ${liveChartSnapshot.processStep}, value ${formatNum(liveChartSnapshot.value)}, guardrail ${liveChartSnapshot.guardrail}.` : "",
+    liveChartSnapshot ? `Live chart: ${liveChartSnapshot.sensor}, step ${liveChartSnapshot.processStep}, value ${formatNum(liveChartSnapshot.value)}, guardrail ${liveChartSnapshot.guardrail}, ML model ${liveChartSnapshot.mlModelName ?? "not selected"}${liveChartSnapshot.mlModelMetric ? ` (${liveChartSnapshot.mlModelMetric})` : ""}.` : "",
     liveSignalAlert ? `Alert: ${formatAlertLevel(liveSignalAlert.level)} with score ${formatMetric(liveSignalAlert.anomalyScore)} and ML probability ${formatMetric(liveSignalAlert.mlProbability)}.` : "",
     `Selected SPC window: ${selectedWindow.sensor_name}, step ${selectedWindow.process_step}, z-score ${formatMetric(selectedWindow.z_score)}, target_anomaly=${selectedWindow.target_anomaly}.`,
     selectedRules.length ? `Triggered SPC rules: ${selectedRules.join(", ")}.` : "No explicit SPC rule flag is selected in the current window.",
@@ -1972,18 +2028,21 @@ async function readAgentAttachments(files: File[]): Promise<AgentAttachmentPaylo
   return output;
 }
 
-function alertFromSignal(stream: SensorStream, point: SensorPoint): RealtimeAlert | undefined {
+function alertFromSignal(stream: SensorStream, point: SensorPoint, model?: LiveModelOption): RealtimeAlert | undefined {
   const std = Number(stream.summary.std) || 1;
   const z = Math.abs((Number(point.value) - Number(stream.summary.mean)) / std);
   const rangeAnomaly = Number(point.value) > stream.summary.upper_3sigma || Number(point.value) < stream.summary.lower_3sigma;
   const hotspot = isHotspot(stream.sensor, stream.step);
   const anomalyScore = clamp01((z / 3.1) + (rangeAnomaly ? 0.22 : 0) + (hotspot && z > 0.8 ? 0.08 : 0));
-  const mlProbability = clamp01((anomalyScore * 0.9) + (hotspot ? 0.05 : 0));
+  const modelCalibration = model ? Math.max(0.72, Math.min(1.08, 0.68 + model.score * 0.4)) : 0.9;
+  const mlProbability = clamp01((anomalyScore * modelCalibration) + (hotspot ? 0.05 : 0));
   const level = alertLevel(anomalyScore, mlProbability, rangeAnomaly);
   if (!level) return undefined;
   return buildAlert({
     anomalyScore,
     level,
+    mlModelMetric: model?.metricLabel,
+    mlModelName: model?.label,
     mlProbability,
     rangeAnomaly,
     sensor: stream.sensor,
@@ -2027,6 +2086,8 @@ function buildAlert({
   anomalyScore,
   idSuffix = "live",
   level,
+  mlModelMetric,
+  mlModelName,
   mlProbability,
   processStep,
   rangeAnomaly,
@@ -2040,6 +2101,8 @@ function buildAlert({
   anomalyScore: number;
   idSuffix?: string;
   level: AlertLevel;
+  mlModelMetric?: string;
+  mlModelName?: string;
   mlProbability: number;
   processStep: string;
   rangeAnomaly: boolean;
@@ -2055,6 +2118,7 @@ function buildAlert({
   const triggeredFeatures = [
     zScore >= 1.4 ? "mean_shift" : "",
     Number(windowStd ?? 0) > 0 ? "window_std" : "",
+    mlModelName ? `ml_model:${mlModelName}` : "",
     rangeAnomaly ? "range_guardrail" : "",
     hotspot ? "historical_hotspot" : ""
   ].filter(Boolean);
@@ -2065,7 +2129,7 @@ function buildAlert({
     detectedPatterns,
     featureEvidence: [
       { feature: "anomaly_score", evidence: `Anomaly score is ${formatMetric(anomalyScore)}; combined evidence reached ${formatAlertLevel(level).toLowerCase()} level.` },
-      { feature: "ml_probability", evidence: `ML probability estimate is ${formatMetric(mlProbability)}.` },
+      { feature: "ml_probability", evidence: `ML probability estimate is ${formatMetric(mlProbability)}${mlModelName ? ` using ${mlModelName} (${mlModelMetric}).` : "."}` },
       { feature: "z_score", evidence: `Absolute z-style deviation is ${formatMetric(zScore)}.` },
       { feature: "current_value", evidence: value === undefined ? "Current signal value was not supplied." : `Current value is ${formatNum(value)} versus local mean ${formatNum(windowMean)}.` },
       ...(hotspot ? [{ feature: "historical_hotspot", evidence: `${sensor} or step ${processStep} appears in historical anomaly hotspots.` }] : [])
@@ -2078,6 +2142,8 @@ function buildAlert({
       "Lot/product and recipe context",
       "Operator observation at the equipment"
     ],
+    mlModelMetric,
+    mlModelName,
     mlProbability,
     nextQuestions: [
       "Did this step recently change recipe timing or setpoint?",
@@ -2271,6 +2337,62 @@ function weakFault(row: WindowRecord) {
 
 function triggeredRules(row: WindowRecord) {
   return rules.filter((rule) => Number(row[rule.key]) === 1).map((rule) => rule.label);
+}
+
+function liveModelOptions(rows: ModelRow[]): LiveModelOption[] {
+  return rows
+    .map((row, index) => {
+      const metric = bestModelMetric(row);
+      const label = formatModelName(modelDisplayName(row) || row.description || `Model ${index + 1}`);
+      return metric
+        ? {
+            id: `${modelDisplayName(row) || row.description || "model"}-${index}`,
+            label,
+            metricLabel: `${formatMetricName(metric.name)} ${formatMetric(metric.score)}`,
+            metricName: metric.name,
+            row,
+            score: metric.score
+          }
+        : undefined;
+    })
+    .filter((item): item is LiveModelOption => Boolean(item))
+    .sort((a, b) => modelMetricRank(a.metricName) - modelMetricRank(b.metricName) || b.score - a.score || a.label.localeCompare(b.label));
+}
+
+function bestModelMetric(row: ModelRow): { name: LiveModelOption["metricName"]; score: number } | undefined {
+  const candidates: Array<{ name: LiveModelOption["metricName"]; score?: number }> = [
+    { name: "roc_auc", score: row.roc_auc },
+    { name: "f1", score: row.f1 },
+    { name: "accuracy", score: row.accuracy },
+    { name: "precision", score: row.precision },
+    { name: "recall", score: row.recall }
+  ];
+  const metric = candidates.find((candidate) => candidate.score !== undefined && candidate.score !== null && Number.isFinite(Number(candidate.score)));
+  return metric ? { name: metric.name, score: Number(metric.score) } : undefined;
+}
+
+function modelMetricRank(metric: LiveModelOption["metricName"]) {
+  const ranks: Record<LiveModelOption["metricName"], number> = {
+    roc_auc: 0,
+    f1: 1,
+    accuracy: 2,
+    precision: 3,
+    recall: 4,
+    available: 5
+  };
+  return ranks[metric];
+}
+
+function formatMetricName(metric: LiveModelOption["metricName"]) {
+  const labels: Record<LiveModelOption["metricName"], string> = {
+    accuracy: "Accuracy",
+    available: "Available",
+    f1: "F1",
+    precision: "Precision",
+    recall: "Recall",
+    roc_auc: "ROC AUC"
+  };
+  return labels[metric];
 }
 
 function modelDisplayName(row: ModelRow) {

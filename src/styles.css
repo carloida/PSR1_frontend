@@ -1409,7 +1409,7 @@ tbody tr.selected {
 
 .stream-toolbar {
   display: grid;
-  grid-template-columns: minmax(11rem, 1fr) minmax(8rem, 0.72fr) auto auto auto;
+  grid-template-columns: minmax(10rem, 0.95fr) minmax(8rem, 0.62fr) minmax(13rem, 1.18fr) auto auto auto;
   gap: 0.65rem;
   align-items: end;
 }
@@ -1443,6 +1443,18 @@ tbody tr.selected {
 
 .stream-toolbar select {
   width: 100%;
+}
+
+.stream-model-select {
+  position: relative;
+}
+
+.stream-model-select small {
+  min-height: 0.9rem;
+  color: #147d64;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
 }
 
 .stream-mode-tabs {
@@ -1547,7 +1559,7 @@ tbody tr.selected {
 
 .stream-metrics {
   display: grid;
-  grid-template-columns: 0.9fr 0.78fr 0.82fr minmax(11rem, 1.25fr) 0.86fr;
+  grid-template-columns: 0.82fr 0.72fr 0.86fr minmax(9rem, 1.12fr) minmax(11rem, 1.16fr) 0.78fr;
   gap: 0.45rem;
 }
 
