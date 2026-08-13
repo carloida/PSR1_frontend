@@ -20,8 +20,9 @@ type AgentChatPayload = {
 
 declare const process: { env: Record<string, string | undefined> };
 
-const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+const model = process.env.OPENAI_MODEL || "gpt-5.6-terra";
 const maxOutputTokens = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 420);
+const reasoningEffort = process.env.OPENAI_REASONING_EFFORT || "low";
 
 export default async function handler(request: Request): Promise<Response> {
   if (request.method !== "POST") {
@@ -51,7 +52,8 @@ export default async function handler(request: Request): Promise<Response> {
         "Always include: This is anomaly evidence, not confirmed fault classification."
       ].join(" "),
       max_output_tokens: maxOutputTokens,
-      model
+      model,
+      reasoning: { effort: reasoningEffort }
     }),
     headers: {
       Authorization: `Bearer ${apiKey}`,

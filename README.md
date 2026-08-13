@@ -43,8 +43,9 @@ Never put API keys in `src/` or any browser-visible code. For local work, put se
 
 ```text
 OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-5-mini
+OPENAI_MODEL=gpt-5.6-terra
 OPENAI_MAX_OUTPUT_TOKENS=420
+OPENAI_REASONING_EFFORT=low
 ```
 
 For Vercel, add the same names in Project Settings -> Environment Variables. The frontend sends a compact case file to `/api/agent`; the serverless route reads `OPENAI_API_KEY` from the server environment and calls OpenAI only after the deterministic troubleshooting answer is already generated.
