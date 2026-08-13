@@ -347,7 +347,7 @@ function ReviewPage({
             <li><strong>5-minute feature windows</strong><span>Build mean, std, min/max, range, slope, setpoint error, oscillation, and prior-window trends.</span></li>
             <li><strong>SPC pseudo-labels</strong><span>Create target_anomaly from statistical rules and keep those guardrails separate from learned inputs.</span></li>
             <li><strong>Clean ML anomaly models</strong><span>Compare Logistic Regression, Random Forest, XGBoost, LightGBM, Isolation Forest, LOF, and autoencoder-style baselines when outputs exist.</span></li>
-            <li><strong>Deterministic explanation</strong><span>Summarize causes, evidence, missing evidence, next questions, and troubleshooting actions without AI tokens.</span></li>
+            <li><strong>Guardrailed AI explanation</strong><span>Preserve the deterministic case result, then add economical AI synthesis across causes, evidence, missing evidence, next questions, and troubleshooting actions.</span></li>
           </ol>
         </Panel>
 
@@ -651,8 +651,8 @@ function IngestPage({ data, onRefresh }: { data: DashboardData; onRefresh: () =>
           </article>
           <article>
             <span>Agent mode</span>
-            <strong>No tokens</strong>
-            <small>Deterministic case-file explanation</small>
+            <strong>Hybrid AI</strong>
+            <small>Deterministic fallback with GPT-5.6 Terra synthesis</small>
           </article>
           <article>
             <span>Indexed outputs</span>
@@ -1343,7 +1343,7 @@ function ExplainabilityAgent({
     {
       role: "agent",
       meta: "Deterministic first",
-      text: "Ask about the selected window, live control chart, guardrails, clean ML outputs, generated evidence, logs, or engineering actions. I run the hard-coded PSR1 troubleshooting logic first, then use the economical AI layer only when the server key is configured."
+      text: "Ask about the selected window, live control chart, guardrails, clean ML outputs, generated evidence, logs, or engineering actions. I run the deterministic PSR1 troubleshooting logic first, then use the economical GPT-5.6 Terra layer when the server key is configured."
     }
   ]);
   const [draft, setDraft] = useState("");
@@ -1444,7 +1444,7 @@ function ExplainabilityAgent({
       </div>
 
       <div className="agent-input">
-        <label title="Attach local context for the future agent">
+        <label title="Attach local context to the active case file">
           +
           <input
             multiple
@@ -1740,30 +1740,36 @@ function AboutModal({ onClose }: { onClose: () => void }) {
         <header>
           <div>
             <p>About this project</p>
-            <h2>PSR1 Real-Time FDC Prototype</h2>
+            <h2>PSR1 Real-Time FDC and Anomaly Review Prototype</h2>
           </div>
           <button type="button" onClick={onClose}>Close</button>
         </header>
 
         <div>
           <p>
-            PSR1 is a semiconductor equipment FDC prototype for PM1 sensor anomaly review. It converts raw time-series readings into 5-minute, step-aware windows, creates SPC pseudo-labels, trains clean anomaly models, and prepares generated evidence for engineering review.
+            PSR1 is a local semiconductor equipment Fault Detection and Classification (FDC) decision-support prototype focused on PM1 sensor anomaly review. It converts raw time-series readings into 5-minute, process-step-aware windows, applies SPC and range guardrails, trains leakage-safe anomaly models, and brings alerts, control charts, model metrics, generated tables, and evidence plots into one engineering workspace.
           </p>
           <p>
-            It is not yet a confirmed fault-code classifier because true fault labels are missing. The stronger current claim is real-time sensor anomaly detection and deterministic explanation: ML scores are paired with SPC/range guardrails, and the token-free agent summarizes possible causes, evidence, missing evidence, next questions, and troubleshooting actions.
+            The current workflow can replay PM1 sensor data, run individual backend stages or the full pipeline, rank windows for review, inspect rule triggers, compare clean-model outputs, and attach logs, maintenance notes, product or recipe context, and operator observations to an active case.
+          </p>
+          <p>
+            Its inference agent uses a hybrid architecture. Deterministic SPC and ML findings are produced first and preserved as a fallback. When the OpenAI API is available, a compact case file is sent securely through the local backend to GPT-5.6 Terra for concise cross-evidence synthesis, possible causes, missing evidence, next questions, and recommended troubleshooting actions.
+          </p>
+          <p>
+            PSR1 is not yet a confirmed fault-code or root-cause classifier because verified fault labels and failure-event ground truth are not available. Its outputs should be treated as anomaly evidence and engineering decision support, not as confirmation of a specific equipment fault.
           </p>
           <div className="about-usecases">
             <article>
               <strong>Live anomaly triage</strong>
-              <span>Watch PM1 sensor windows, guardrail triggers, and review priority in one local workspace.</span>
+              <span>Replay PM1 data, follow step-aware windows and control charts, and prioritize alerts using combined ML and deterministic evidence.</span>
             </article>
             <article>
-              <strong>Clean ML review</strong>
-              <span>Compare leakage-safe model outputs while keeping SPC proxy features as deterministic guardrails.</span>
+              <strong>Leakage-safe model review</strong>
+              <span>Compare model scores and feature importance while keeping proxy labels, SPC flags, and control-limit features outside model training.</span>
             </article>
             <article>
-              <strong>Explainable action</strong>
-              <span>Attach logs, maintenance notes, product context, and operator descriptions for structured case-file explanations.</span>
+              <strong>Evidence-backed action</strong>
+              <span>Combine deterministic findings, screen context, alert history, and optional attachments for guardrailed AI synthesis with a local fallback.</span>
             </article>
           </div>
         </div>
